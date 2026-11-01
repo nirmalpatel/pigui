@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Destination {
     pub ip: String,
+    pub hostname: Option<String>,
     pub first_seen: i64,
     pub last_seen: i64,
     pub bytes_in: u64,

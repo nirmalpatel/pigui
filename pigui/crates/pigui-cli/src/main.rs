@@ -3,9 +3,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
+use pigui_core::paths::resolve_snort;
 use pigui_core::rpc::{
-    AlertList, AlertsQuery, DestinationList, DestinationsQuery, METHOD_ALERTS_LIST,
-    METHOD_DESTINATIONS_LIST, METHOD_STATUS, StatusPayload,
+    AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, FlowList, HttpList,
+    METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST,
+    METHOD_FLOWS_LIST, METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST,
+    ProcessList, StatusPayload, TlsList,
 };
 use pigui_daemon::ingest;
 use pigui_daemon::store::Store;
@@ -41,12 +44,72 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// List live flows from the nettop collector.
+    Flows {
+        #[arg(long, default_value_t = 40)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List active processes.
+    Processes {
+        #[arg(long, default_value_t = 40)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List completed connections from the Snort extractor.
+    Connections {
+        #[arg(long, default_value_t = 40)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List DNS observations.
+    Dns {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List TLS observations.
+    Tls {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List HTTP observations.
+    Http {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Ingest an alert_json file directly into SQLite.
     Ingest {
         #[arg(long)]
         file: PathBuf,
         #[arg(long)]
         db: Option<PathBuf>,
+    },
+    /// Snort configuration and process helpers.
+    Snort {
+        #[command(subcommand)]
+        command: SnortCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SnortCommand {
+    /// Generate and validate the live Snort configuration.
+    GenerateConfig,
+    /// Validate the generated Snort configuration.
+    Validate,
+    /// Show live Snort process status.
+    Status {
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -60,7 +123,7 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&capabilities)?);
         }
         Command::Status { json } => {
-            let client = DaemonClient::new(&config.socket_path);
+            let client = client(&config);
             let status: StatusPayload = client.call_typed(METHOD_STATUS, json!({}))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&status)?);
@@ -69,13 +132,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Command::Alerts { limit, json } => {
-            let client = DaemonClient::new(&config.socket_path);
-            let query = AlertsQuery {
-                limit: Some(limit),
-                offset: None,
-            };
-            let list: AlertList =
-                client.call_typed(METHOD_ALERTS_LIST, serde_json::to_value(query)?)?;
+            let list: AlertList = client(&config).call_typed(
+                METHOD_ALERTS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else {
@@ -83,35 +146,169 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Command::Destinations { limit, json } => {
-            let client = DaemonClient::new(&config.socket_path);
-            let query = DestinationsQuery {
-                limit: Some(limit),
-                offset: None,
-            };
-            let list: DestinationList =
-                client.call_typed(METHOD_DESTINATIONS_LIST, serde_json::to_value(query)?)?;
+            let list: DestinationList = client(&config).call_typed(
+                METHOD_DESTINATIONS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else {
                 print_destinations(&list);
             }
         }
+        Command::Flows { limit, json } => {
+            let list: FlowList = client(&config).call_typed(
+                METHOD_FLOWS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_flows(&list);
+            }
+        }
+        Command::Processes { limit, json } => {
+            let list: ProcessList = client(&config).call_typed(
+                METHOD_PROCESSES_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_processes(&list);
+            }
+        }
+        Command::Connections { limit, json } => {
+            let list: ConnectionList = client(&config).call_typed(
+                METHOD_CONNECTIONS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_connections(&list);
+            }
+        }
+        Command::Dns { limit, json } => {
+            let list: DnsList = client(&config).call_typed(
+                METHOD_DNS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_dns(&list);
+            }
+        }
+        Command::Tls { limit, json } => {
+            let list: TlsList = client(&config).call_typed(
+                METHOD_TLS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_tls(&list);
+            }
+        }
+        Command::Http { limit, json } => {
+            let list: HttpList = client(&config).call_typed(
+                METHOD_HTTP_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_http(&list);
+            }
+        }
         Command::Ingest { file, db } => {
             if let Some(db) = db {
-                config.db_path = db;
+                config.db_path = config.resolve(&db);
             }
             let mut store = Store::open(&config.db_path)?;
             let stats = ingest::ingest_file(&mut store, &file)?;
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
+        Command::Snort { command } => match command {
+            SnortCommand::GenerateConfig => {
+                let generated = pigui_snort::generate_config(&config)?;
+                println!("{}", serde_json::to_string_pretty(&generated)?);
+                if !generated.valid {
+                    anyhow::bail!("generated Snort configuration failed validation");
+                }
+            }
+            SnortCommand::Validate => {
+                let binary = resolve_snort(&config)?;
+                let path = config.snort_config_dir.join("snort.lua");
+                let (valid, detail) = pigui_snort::validate_config(&binary.path, &path)?;
+                println!("valid: {valid}");
+                if !detail.is_empty() {
+                    println!("{detail}");
+                }
+                if !valid {
+                    anyhow::bail!("Snort configuration failed validation");
+                }
+            }
+            SnortCommand::Status { json } => {
+                let status = pigui_snort::status::status(&config);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                } else {
+                    println!("running:       {}", yes_no(status.running));
+                    println!("pid:           {}", optional(status.pid));
+                    println!(
+                        "interface:     {}",
+                        status.interface.as_deref().unwrap_or("-")
+                    );
+                    println!(
+                        "config:        {}",
+                        status.config_path.as_deref().unwrap_or("-")
+                    );
+                    println!("log dir:       {}", status.log_dir);
+                    println!("extractor:     {}", status.extractor_json);
+                    println!(
+                        "control sock:  {}",
+                        status.control_socket.as_deref().unwrap_or("-")
+                    );
+                    println!("pidfile:       {}", status.pidfile);
+                }
+            }
+        },
     }
 
     Ok(())
 }
 
+fn client(config: &Config) -> DaemonClient {
+    DaemonClient::new(&config.socket_path)
+}
+
 fn print_status(status: &StatusPayload, config: &Config) {
     let caps = &status.capabilities;
     println!("PIGUI daemon status");
+    println!("  mode:            {}", status.mode);
     println!("  uptime:          {}s", status.uptime_secs);
     println!(
         "  version:         {}",
@@ -137,15 +334,27 @@ fn print_status(status: &StatusPayload, config: &Config) {
             None => "not checked",
         }
     );
+    println!("  snort running:   {}", yes_no(status.snort_running));
+    println!("  snort pid:       {}", optional(status.snort_pid));
+    println!(
+        "  interface:       {}",
+        status.snort_interface.as_deref().unwrap_or("-")
+    );
     println!("  database:        {}", status.db_path);
     println!("  socket:          {}", status.socket_path);
     println!("  alert file:      {}", status.alert_json);
     println!("  alerts stored:   {}", status.alert_count);
     println!("  destinations:    {}", status.destination_count);
-    println!("  ingested total:  {}", status.alerts_ingested);
+    println!("  active flows:    {}", status.active_flows);
+    println!("  active procs:    {}", status.active_processes);
+    println!("  alerts ingested: {}", status.alerts_ingested);
+    println!("  extractor rows:  {}", status.extractor_ingested);
     println!("  parse errors:    {}", status.parse_errors);
     println!("  config dir:      {}", config.home.display());
 
+    if let Some(error) = &status.collector_error {
+        println!("collector error:  {error}");
+    }
     if !status.degraded.is_empty() {
         println!("degraded:");
         for reason in &status.degraded {
@@ -202,21 +411,177 @@ fn print_destinations(list: &DestinationList) {
         list.destinations.len()
     );
     println!(
-        "{:<24} {:<8} {:<12} {:<12} blocked",
-        "ip", "alerts", "first seen", "last seen"
+        "{:<24} {:<28} {:<8} {:<10} {:<10} blocked",
+        "ip", "hostname", "alerts", "processes", "flow bytes"
     );
     for destination in &list.destinations {
         println!(
-            "{:<24} {:<8} {:<12} {:<12} {}",
+            "{:<24} {:<28} {:<8} {:<10} {:<10} {}",
             destination.ip,
+            destination.hostname.as_deref().unwrap_or("-"),
             destination.alert_count,
-            destination.first_seen,
-            destination.last_seen,
+            destination.process_count,
+            destination.bytes_in + destination.bytes_out,
             yes_no(destination.blocked),
+        );
+    }
+}
+
+fn print_flows(list: &FlowList) {
+    println!("{} flows (showing {})", list.total, list.flows.len());
+    println!(
+        "{:<10} {:<8} {:<6} {:<20} {:<34} {:<12} {:<22} bytes ab/ba",
+        "process", "pid", "proto", "state", "remote", "interface", "local"
+    );
+    for flow in &list.flows {
+        let local = format!("{}:{}", flow.client_ip, flow.client_port);
+        let remote = format!("{}:{}", flow.server_ip, flow.server_port);
+        let bytes = format!("{}/{}", flow.bytes_ab, flow.bytes_ba);
+        println!(
+            "{:<10} {:<8} {:<6} {:<20} {:<34} {:<12} {:<22} {}",
+            flow.process_name.as_deref().unwrap_or("-"),
+            optional(flow.pid),
+            flow.proto,
+            flow.state.as_deref().unwrap_or("-"),
+            remote,
+            flow.interface.as_deref().unwrap_or("-"),
+            local,
+            bytes,
+        );
+    }
+}
+
+fn print_processes(list: &ProcessList) {
+    println!(
+        "{} processes (showing {})",
+        list.total,
+        list.processes.len()
+    );
+    println!(
+        "{:<8} {:<24} {:<8} {:<14} {:<14} last seen",
+        "pid", "name", "conns", "bytes in", "bytes out"
+    );
+    for process in &list.processes {
+        println!(
+            "{:<8} {:<24} {:<8} {:<14} {:<14} {}",
+            process.pid,
+            process.name,
+            process.connection_count,
+            process.bytes_in,
+            process.bytes_out,
+            process.last_seen,
+        );
+    }
+}
+
+fn print_connections(list: &ConnectionList) {
+    println!(
+        "{} connections (showing {})",
+        list.total,
+        list.connections.len()
+    );
+    println!(
+        "{:<12} {:<12} {:<8} {:<6} {:<34} {:<12} {:<10} bytes ab/ba",
+        "time", "process", "pid", "proto", "remote", "service", "state"
+    );
+    for connection in &list.connections {
+        let remote = format!(
+            "{}:{}",
+            connection.server_ip.as_deref().unwrap_or("-"),
+            connection.server_port.unwrap_or(0)
+        );
+        let bytes = format!("{}/{}", connection.bytes_ab, connection.bytes_ba);
+        println!(
+            "{:<12} {:<12} {:<8} {:<6} {:<34} {:<12} {:<10} {}",
+            connection.ts,
+            connection.process_name.as_deref().unwrap_or("-"),
+            optional(connection.pid),
+            connection.proto.as_deref().unwrap_or("-"),
+            remote,
+            connection.service.as_deref().unwrap_or("-"),
+            connection.conn_state.as_deref().unwrap_or("-"),
+            bytes,
+        );
+    }
+}
+
+fn print_dns(list: &DnsList) {
+    println!(
+        "{} DNS observations (showing {})",
+        list.total,
+        list.observations.len()
+    );
+    println!(
+        "{:<12} {:<24} {:<10} {:<12} answers",
+        "time", "query", "type", "rcode"
+    );
+    for observation in &list.observations {
+        println!(
+            "{:<12} {:<24} {:<10} {:<12} {}",
+            observation.ts,
+            observation.query.as_deref().unwrap_or("-"),
+            observation.qtype.as_deref().unwrap_or("-"),
+            observation.rcode.as_deref().unwrap_or("-"),
+            observation.answers.as_deref().unwrap_or("-"),
+        );
+    }
+}
+
+fn print_tls(list: &TlsList) {
+    println!(
+        "{} TLS observations (showing {})",
+        list.total,
+        list.observations.len()
+    );
+    println!(
+        "{:<12} {:<28} {:<16} {:<34} status",
+        "time", "server name", "version", "server ip"
+    );
+    for observation in &list.observations {
+        let server = format!(
+            "{}:{}",
+            observation.server_ip.as_deref().unwrap_or("-"),
+            observation.server_port.unwrap_or(0)
+        );
+        println!(
+            "{:<12} {:<28} {:<16} {:<34} {}",
+            observation.ts,
+            observation.server_name.as_deref().unwrap_or("-"),
+            observation.version.as_deref().unwrap_or("-"),
+            server,
+            observation.validation_status.as_deref().unwrap_or("-"),
+        );
+    }
+}
+
+fn print_http(list: &HttpList) {
+    println!(
+        "{} HTTP observations (showing {})",
+        list.total,
+        list.observations.len()
+    );
+    println!(
+        "{:<12} {:<8} {:<28} {:<10} uri",
+        "time", "method", "host", "status"
+    );
+    for observation in &list.observations {
+        println!(
+            "{:<12} {:<8} {:<28} {:<10} {}",
+            observation.ts,
+            observation.method.as_deref().unwrap_or("-"),
+            observation.host.as_deref().unwrap_or("-"),
+            observation.status_code.as_deref().unwrap_or("-"),
+            observation.uri.as_deref().unwrap_or("-"),
         );
     }
 }
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn optional<T: std::fmt::Display>(value: Option<T>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
 }

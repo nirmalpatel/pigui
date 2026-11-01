@@ -96,9 +96,19 @@ async fn main() -> anyhow::Result<()> {
         ingest::run(ingest_state, tailer).await;
     });
 
+    let extractor_tailer = Tailer::new(&config.extractor_json);
+    let extractor_state = state.clone();
+    tokio::spawn(async move {
+        ingest::run_extractor(extractor_state, extractor_tailer).await;
+    });
+
+    ingest::spawn_process_collector(state.clone());
+
     tracing::info!(
+        mode = %config.mode,
         db = %config.db_path.display(),
         alerts = %alerts_file.display(),
+        extractor = %config.extractor_json.display(),
         socket = %config.socket_path.display(),
         "pigui-daemon started"
     );

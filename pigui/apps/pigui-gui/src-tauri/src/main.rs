@@ -2,7 +2,10 @@
 
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
-use pigui_core::rpc::{METHOD_ALERTS_LIST, METHOD_DESTINATIONS_LIST, METHOD_STATUS};
+use pigui_core::rpc::{
+    METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST, METHOD_FLOWS_LIST,
+    METHOD_PROCESSES_LIST, METHOD_STATUS,
+};
 use serde_json::{Value, json};
 
 fn prepare_home() {
@@ -46,6 +49,33 @@ fn list_destinations(limit: Option<u32>) -> Result<Value, String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_flows(limit: Option<u32>) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FLOWS_LIST, json!({ "limit": limit.unwrap_or(300) }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_processes(limit: Option<u32>) -> Result<Value, String> {
+    client()?
+        .call(
+            METHOD_PROCESSES_LIST,
+            json!({ "limit": limit.unwrap_or(200) }),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_connections(limit: Option<u32>) -> Result<Value, String> {
+    client()?
+        .call(
+            METHOD_CONNECTIONS_LIST,
+            json!({ "limit": limit.unwrap_or(200) }),
+        )
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     prepare_home();
 
@@ -53,7 +83,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             list_alerts,
-            list_destinations
+            list_destinations,
+            list_flows,
+            list_processes,
+            list_connections
         ])
         .run(tauri::generate_context!())
         .expect("error while running PIGUI");

@@ -1,0 +1,5 @@
+{"ts":1750000000,"uid":"C1","pkt_num":10,"id.orig_h":"10.0.0.5","id.orig_p":50000,"id.resp_h":"198.51.100.10","id.resp_p":443,"proto":"tcp","service":"ssl","conn_state":"SF","duration":1.25,"orig_pkts":10,"resp_pkts":12,"orig_bytes":1000,"resp_bytes":2000}
+{"ts":1750000001,"uid":"D1","pkt_num":11,"id.orig_h":"10.0.0.5","id.orig_p":53000,"id.resp_h":"203.0.113.53","id.resp_p":53,"proto":"udp","query":"example.com","qtype_name":"A","rcode_name":"NOERROR","answers":"93.184.216.34","TTLs":"300"}
+{"ts":1750000002,"uid":"T1","pkt_num":12,"id.orig_h":"10.0.0.5","id.orig_p":50001,"id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"example.com","version":"TLSv1.3","validation_status":"valid","subject":"CN=example.com","issuer":"CN=Test CA"}
+{"ts":1750000003,"uid":"H1","pkt_num":13,"id.orig_h":"10.0.0.5","id.orig_p":50002,"id.resp_h":"93.184.216.34","id.resp_p":80,"method":"GET","host":"example.com","uri":"/index.html","user_agent":"PIGUI test","status_code":"200"}
+{"ts":1750000004,"uid":"Q1","pkt_num":14,"id.orig_h":"10.0.0.5","id.orig_p":50003,"id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"example.com","client_protocol":"h3"}

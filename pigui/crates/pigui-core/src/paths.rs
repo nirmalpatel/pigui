@@ -117,6 +117,14 @@ mod tests {
             db_path: home.join("var/lib/pigui.db"),
             alert_json: home.join("var/log/alert_json.txt"),
             socket_path: home.join("var/run/pigui-daemon.sock"),
+            mode: "fixture".to_string(),
+            snort_interface: None,
+            snort_log_dir: home.join("var/log/snort"),
+            snort_config_dir: home.join("var/snort"),
+            extractor_json: home.join("var/log/snort/file_connector_pigui_transmit"),
+            snort_pidfile: home.join("var/log/snort/snort.pid"),
+            snort_control_socket: home.join("var/run/snort.sock"),
+            process_poll_ms: 1000,
         };
 
         let resolved = resolve_snort(&config).unwrap();

@@ -1,9 +1,8 @@
 -- PIGUI Snort overrides.
 --
--- Phase 1 only documents the intended telemetry shape. This file is not
--- activated or generated yet; live Snort configuration is part of the next
--- milestone. PIGUI will own the generated copy under pigui/var/ and treat the
--- parent lua/ directory as a read-only source of defaults.
+-- This file documents the telemetry shape. The daemon generates the active
+-- copy under pigui/var/snort/ by copying the parent lua/ defaults and
+-- appending these overrides. The parent lua/ tree is never edited in place.
 
 alert_json =
 {
@@ -13,22 +12,39 @@ alert_json =
 
 dns = { publish_response = true }
 
+file_connector =
+{
+    {
+        connector = 'pigui_events',
+        name = 'pigui',
+        direction = 'transmit',
+        text_format = true,
+    },
+}
+
 extractor =
 {
     formatting = 'json',
-    connector = 'pigui_extractor',
+    connector = 'pigui_events',
     time = 'unix',
+    default_filter = 'skip',
     protocols =
     {
         { service = 'conn', on_events = 'eof',
-          fields = 'ts uid id.orig_h id.orig_p id.resp_h id.resp_p proto service conn_state duration orig_pkts resp_pkts orig_bytes resp_bytes' },
+          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p proto service conn_state duration orig_pkts resp_pkts orig_bytes resp_bytes' },
         { service = 'dns', on_events = 'response',
-          fields = 'ts uid id.orig_h id.orig_p id.resp_h id.resp_p proto query qtype_name rcode_name answers TTLs' },
+          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p proto query qtype_name rcode_name answers TTLs' },
         { service = 'ssl', on_events = 'tls_metadata_event',
-          fields = 'ts uid id.orig_h id.orig_p id.resp_h id.resp_p server_name version validation_status subject issuer' },
+          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p server_name version validation_status subject issuer' },
         { service = 'http', on_events = 'eot',
-          fields = 'ts uid id.orig_h id.orig_p id.resp_h id.resp_p method host uri user_agent status_code' },
+          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p method host uri user_agent status_code' },
         { service = 'quic', on_events = 'handshake',
-          fields = 'ts uid id.orig_h id.orig_p id.resp_h id.resp_p server_name client_protocol' },
+          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p server_name client_protocol' },
     },
+}
+
+ips =
+{
+    variables = default_variables,
+    enable_builtin_rules = true,
 }

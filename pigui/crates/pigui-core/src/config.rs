@@ -18,6 +18,14 @@ pub struct Config {
     pub db_path: PathBuf,
     pub alert_json: PathBuf,
     pub socket_path: PathBuf,
+    pub mode: String,
+    pub snort_interface: Option<String>,
+    pub snort_log_dir: PathBuf,
+    pub snort_config_dir: PathBuf,
+    pub extractor_json: PathBuf,
+    pub snort_pidfile: PathBuf,
+    pub snort_control_socket: PathBuf,
+    pub process_poll_ms: u64,
 }
 
 impl Config {
@@ -67,6 +75,44 @@ impl Config {
             path_var("PIGUI_SOCKET", run_dir.join("pigui-daemon.sock")),
         );
 
+        let mode = env::var("PIGUI_MODE").unwrap_or_else(|_| "fixture".to_string());
+        let snort_interface = env::var("PIGUI_SNORT_INTERFACE")
+            .ok()
+            .filter(|value| !value.is_empty());
+        let snort_log_dir = absolute(
+            &home,
+            path_var("PIGUI_SNORT_LOG_DIR", log_dir.join("snort")),
+        );
+        // In live mode the alert file is written by Snort into its log dir.
+        let alert_json = if mode == "live" && env::var_os("PIGUI_ALERT_JSON").is_none() {
+            snort_log_dir.join("alert_json.txt")
+        } else {
+            alert_json
+        };
+        let snort_config_dir = absolute(
+            &home,
+            path_var("PIGUI_SNORT_CONFIG_DIR", home.join("var/snort")),
+        );
+        let extractor_json = absolute(
+            &home,
+            path_var(
+                "PIGUI_EXTRACTOR_JSON",
+                snort_log_dir.join("file_connector_pigui_transmit"),
+            ),
+        );
+        let snort_pidfile = absolute(
+            &home,
+            path_var("PIGUI_SNORT_PIDFILE", snort_log_dir.join("snort.pid")),
+        );
+        let snort_control_socket = absolute(
+            &home,
+            path_var("PIGUI_SNORT_CONTROL_SOCKET", run_dir.join("snort.sock")),
+        );
+        let process_poll_ms = env::var("PIGUI_PROCESS_POLL_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1_000);
+
         Ok(Self {
             home,
             snort_bin,
@@ -77,6 +123,14 @@ impl Config {
             db_path,
             alert_json,
             socket_path,
+            mode,
+            snort_interface,
+            snort_log_dir,
+            snort_config_dir,
+            extractor_json,
+            snort_pidfile,
+            snort_control_socket,
+            process_poll_ms,
         })
     }
 
@@ -90,10 +144,15 @@ impl Config {
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
-        for dir in [&self.run_dir, &self.log_dir] {
+        for dir in [
+            &self.run_dir,
+            &self.log_dir,
+            &self.snort_log_dir,
+            &self.snort_config_dir,
+        ] {
             std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
         }
-        for file in [&self.db_path, &self.alert_json] {
+        for file in [&self.db_path, &self.alert_json, &self.extractor_json] {
             if let Some(parent) = file.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
             }
@@ -152,6 +211,14 @@ mod tests {
             db_path: home.join("var/lib/pigui.db"),
             alert_json: home.join("var/log/alert_json.txt"),
             socket_path: home.join("var/run/pigui-daemon.sock"),
+            mode: "fixture".to_string(),
+            snort_interface: None,
+            snort_log_dir: home.join("var/log/snort"),
+            snort_config_dir: home.join("var/snort"),
+            extractor_json: home.join("var/log/snort/file_connector_pigui_transmit"),
+            snort_pidfile: home.join("var/log/snort/snort.pid"),
+            snort_control_socket: home.join("var/run/snort.sock"),
+            process_poll_ms: 1000,
         }
     }
 }

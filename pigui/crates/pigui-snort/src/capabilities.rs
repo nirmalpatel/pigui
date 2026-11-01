@@ -46,7 +46,7 @@ pub fn probe(config: &Config) -> SnortCapabilities {
         let path = config.resolve(config_path);
         caps.config_path = Some(path.display().to_string());
         if path.is_file() {
-            match validate(&resolved.path, &path) {
+            match validate_config(&resolved.path, &path) {
                 Ok((valid, detail)) => {
                     caps.config_valid = Some(valid);
                     if !valid {
@@ -70,7 +70,7 @@ pub fn probe(config: &Config) -> SnortCapabilities {
     caps
 }
 
-fn validate(binary: &Path, config_path: &Path) -> pigui_core::Result<(bool, String)> {
+pub fn validate_config(binary: &Path, config_path: &Path) -> pigui_core::Result<(bool, String)> {
     let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let file = config_path.file_name().unwrap_or(config_path.as_os_str());
 

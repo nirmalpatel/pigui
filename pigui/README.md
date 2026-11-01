@@ -5,11 +5,12 @@ It combines Snort's detection telemetry with operating-system process
 attribution, a local manager daemon, a privileged firewall helper, and a GUI
 inspired by Activity Monitor.
 
-Status: early implementation. Phase 1 (the first runnable vertical slice) is
-implemented: the Rust workspace, Snort discovery/capability probe, `alert_json`
-fixture ingestion into SQLite, a local daemon API, the CLI, and a Tauri 2 +
-Svelte shell. Live Snort supervision, OS collectors, PF enforcement, and rule
-bundles remain planned.
+Status: early implementation. Phase 1 (fixture ingestion) and Phase 2 (live
+capture + process attribution) are implemented: the Rust workspace, Snort
+discovery/capability probe, generated live Snort config, `alert_json` and
+extractor ingestion into SQLite, nettop-based process/connection collection, a
+local daemon API, the CLI, and a Tauri 2 + Svelte shell. PF enforcement, rule
+bundles, and launchd packaging remain planned.
 
 Target platform: macOS first. Linux and Windows are planned as later platform
 adapters, not first-release requirements.
@@ -635,11 +636,11 @@ Development paths must not require writing to the parent Snort source tree.
 | M0 | Branch, README, architecture, repository guardrails | Complete |
 | M1 | Rust workspace and Tauri scaffold | Complete |
 | M2 | Core models, config, SQLite schema, fixture parsers | Partial: alerts/destinations schema and parser complete |
-| M3 | Snort discovery, config generation, control adapter, log ingestion | Partial: discovery, probe, fixture tailing complete; live control adapter pending |
-| M4 | macOS process/socket collector and correlation | Planned |
+| M3 | Snort discovery, config generation, control adapter, log ingestion | Partial: live config generation, alert/extractor ingestion complete; control adapter pending |
+| M4 | macOS process/socket collector and correlation | Partial: nettop collector and tuple joins complete; Network Extension later |
 | M5 | Rule bundle manager and validation pipeline | Planned |
 | M6 | PF helper in dry-run mode | Planned |
-| M7 | Daemon API and GUI MVP | Partial: status/alerts/destinations API and shell complete |
+| M7 | Daemon API and GUI MVP | Partial: live processes/connections/destinations/alerts API and tabs complete |
 | M8 | launchd packaging and macOS system integration | Planned |
 | M9 | Hardening, retention, audit, tests, documentation | Planned |
 | M10 | Linux/ufw/nftables and Windows research | Later |
@@ -728,4 +729,41 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 The daemon replays the alert file from the beginning on startup and relies on
 the SQLite dedupe index, so restarting it does not duplicate events. Use
-`--from-end` to skip existing content once live Snort output is wired in.
+`--from-end` to skip existing content.
+
+## Phase 2 Quick Start — Live Capture
+
+Live capture uses a PIGUI-generated Snort configuration, the extractor JSONL
+file, and the macOS `nettop` collector. Snort needs `sudo` for BPF access;
+metadata only is stored (no packet payloads).
+
+```bash
+cd pigui
+./scripts/run-live.sh
+```
+
+This requests sudo credentials, validates the generated Snort config, starts
+Snort on `en0`, starts the daemon with `var/lib/pigui-live.db`, and opens the
+Tauri window. Useful commands:
+
+```bash
+./scripts/snort-live.sh          # run Snort in the foreground
+./scripts/stop-live.sh           # stop Snort and the daemon
+
+./target/debug/pigui-cli snort generate-config
+./target/debug/pigui-cli snort status
+./target/debug/pigui-cli flows --limit 20
+./target/debug/pigui-cli processes --limit 20
+./target/debug/pigui-cli connections --limit 20
+```
+
+Live data comes from two sources:
+
+- `nettop` snapshots provide active connections, process names, PIDs, and byte
+  counters every second.
+- Snort extractor records provide completed `conn` events and DNS/TLS/HTTP/QUIC
+  metadata used to enrich destinations and completed connections.
+
+Expected limits: passive capture only sees this Mac's traffic, not other LAN
+devices; HTTPS hostnames come from SNI/DNS, not payload decryption; short-lived
+flows and process attribution are best-effort.

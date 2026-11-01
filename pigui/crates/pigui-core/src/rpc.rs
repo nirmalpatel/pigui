@@ -1,12 +1,23 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::models::{Alert, Destination, SnortCapabilities};
+use crate::models::{
+    Alert, Connection, Destination, DnsObservation, Flow, HttpObservation, Process,
+    QuicObservation, SnortCapabilities, TlsObservation,
+};
 
 pub const METHOD_STATUS: &str = "status";
 pub const METHOD_HEALTH: &str = "health";
 pub const METHOD_ALERTS_LIST: &str = "alerts.list";
 pub const METHOD_DESTINATIONS_LIST: &str = "destinations.list";
+pub const METHOD_FLOWS_LIST: &str = "flows.list";
+pub const METHOD_PROCESSES_LIST: &str = "processes.list";
+pub const METHOD_CONNECTIONS_LIST: &str = "connections.list";
+pub const METHOD_DNS_LIST: &str = "dns.list";
+pub const METHOD_TLS_LIST: &str = "tls.list";
+pub const METHOD_HTTP_LIST: &str = "http.list";
+pub const METHOD_QUIC_LIST: &str = "quic.list";
+pub const METHOD_SNORT_STATUS: &str = "snort.status";
 pub const METHOD_SHUTDOWN: &str = "shutdown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +105,60 @@ pub struct DestinationList {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowList {
+    pub flows: Vec<Flow>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessList {
+    pub processes: Vec<Process>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionList {
+    pub connections: Vec<Connection>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsList {
+    pub observations: Vec<DnsObservation>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsList {
+    pub observations: Vec<TlsObservation>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpList {
+    pub observations: Vec<HttpObservation>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuicList {
+    pub observations: Vec<QuicObservation>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnortStatusPayload {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub interface: Option<String>,
+    pub config_path: Option<String>,
+    pub log_dir: String,
+    pub extractor_json: String,
+    pub control_socket: Option<String>,
+    pub pidfile: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusPayload {
     pub capabilities: SnortCapabilities,
     pub db_path: String,
@@ -105,6 +170,22 @@ pub struct StatusPayload {
     pub alert_count: u64,
     pub destination_count: u64,
     pub degraded: Vec<String>,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub snort_running: bool,
+    #[serde(default)]
+    pub snort_pid: Option<u32>,
+    #[serde(default)]
+    pub snort_interface: Option<String>,
+    #[serde(default)]
+    pub active_flows: u64,
+    #[serde(default)]
+    pub active_processes: u64,
+    #[serde(default)]
+    pub extractor_ingested: u64,
+    #[serde(default)]
+    pub collector_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
