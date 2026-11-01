@@ -106,7 +106,9 @@ impl ExtractorRecord {
             }));
         }
 
-        if value.get("validation_status").is_some()
+        if value.get("server_name").is_some()
+            || value.get("version").is_some()
+            || value.get("validation_status").is_some()
             || value.get("subject").is_some()
             || value.get("issuer").is_some()
         {
@@ -121,6 +123,7 @@ impl ExtractorRecord {
         }
 
         if value.get("method").is_some()
+            || value.get("host").is_some()
             || value.get("uri").is_some()
             || value.get("status_code").is_some()
         {
@@ -262,6 +265,16 @@ mod tests {
             panic!("expected tls");
         };
         assert_eq!(event.server_name.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn parses_tls_record_without_validation_fields() {
+        let line = r#"{"ts":1750000002,"id.orig_h":"10.0.0.5","id.orig_p":50001,"id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"example.com","version":"TLS 1.3"}"#;
+        let ExtractorRecord::Tls(event) = ExtractorRecord::parse(line).unwrap() else {
+            panic!("expected tls");
+        };
+        assert_eq!(event.server_name.as_deref(), Some("example.com"));
+        assert_eq!(event.version.as_deref(), Some("TLS 1.3"));
     }
 
     #[test]

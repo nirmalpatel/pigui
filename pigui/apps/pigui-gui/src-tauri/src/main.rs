@@ -51,6 +51,12 @@ fn daemon_binary() -> Result<PathBuf, String> {
     }
 }
 
+fn agent_service_enabled() -> bool {
+    service::run(ServiceAction::Status)
+        .map(|output| output.contains("\"agent\":\"enabled\""))
+        .unwrap_or(false)
+}
+
 fn start_daemon_if_needed() -> Result<String, String> {
     let config = Config::load().map_err(|error| error.to_string())?;
     if config.socket_path.exists() {
@@ -62,6 +68,20 @@ fn start_daemon_if_needed() -> Result<String, String> {
             return Ok("daemon is already running".to_string());
         }
         let _ = std::fs::remove_file(&config.socket_path);
+    }
+
+    if agent_service_enabled() {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if config.socket_path.exists() {
+                return Ok("pigui-daemon started by the SMAppService agent".to_string());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        return Err(format!(
+            "the SMAppService daemon agent is enabled but did not create {}; re-register the agent or check launchd",
+            config.socket_path.display()
+        ));
     }
 
     let daemon = daemon_binary()?;
