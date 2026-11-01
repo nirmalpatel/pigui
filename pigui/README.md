@@ -443,8 +443,13 @@ Safety requirements:
 
 ## GUI
 
-The GUI is a Tauri 2 application with a Rust backend and a web frontend. The
-frontend technology is still open; Svelte and React are both viable.
+The GUI is a Tauri 2 application with a Rust backend and a Svelte frontend.
+The shell uses a responsive, full-width flex layout: headers and status bars
+stay fixed while content panels and tables grow to fill the window, with
+breakpoints for smaller windows. The theme switch supports System, Light, and
+Dark; the selection is persisted in a GUI-local SQLite database
+(`var/lib/pigui-gui.db` in development, the Tauri app-data directory in release)
+and cached in `localStorage` so the correct theme is applied before mount.
 
 Primary views:
 
@@ -663,8 +668,8 @@ Development paths must not require writing to the parent Snort source tree.
 
 Resolved:
 
-- GUI stack: Rust + Tauri 2.
-- Storage: SQLite first.
+- GUI stack: Rust + Tauri 2 with a Svelte frontend.
+- Storage: SQLite first; GUI preferences use a separate GUI-local SQLite database.
 - macOS first; Linux and Windows later.
 - PIGUI consumes Snort as an external process, not a linked library.
 - Snort control socket is preferred for management, with signal/file fallback.
@@ -676,7 +681,6 @@ Still open:
 - Minimum macOS version. Current proposal: macOS 14+.
 - Whether the daemon and helper are separate binaries in the first milestone or
   start as one development-only service and split before release.
-- Whether the frontend uses Svelte or React.
 - Whether process-aware blocking is a later Network Extension effort.
 - Whether the ruleset is native Snort syntax or a custom DSL requiring a
   compiler.

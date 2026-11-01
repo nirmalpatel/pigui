@@ -2,6 +2,12 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
+  type ThemeMode = "system" | "light" | "dark";
+
+  interface AppSettings {
+    theme: ThemeMode;
+  }
+
   interface SnortCapabilities {
     binary?: string;
     source?: string;
@@ -162,6 +168,11 @@
   let refreshing = $state(false);
   let lastUpdated = $state("");
   let filter = $state("");
+  let themeMode = $state<ThemeMode>(cachedTheme());
+  let systemDark = $state(
+    typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
 
   const filteredFlows = $derived(filterItems(flows, filter, (flow) => [
     flow.process_name,
@@ -229,6 +240,12 @@
     { id: "destinations", label: "Destinations" },
     { id: "alerts", label: "Alerts" },
     { id: "capture", label: "Capture" },
+  ];
+
+  const themeOptions: { id: ThemeMode; label: string }[] = [
+    { id: "system", label: "System" },
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
   ];
 
   async function refresh() {
@@ -301,10 +318,68 @@
     return port ? `${ip}:${port}` : ip;
   }
 
+  function isThemeMode(value: unknown): value is ThemeMode {
+    return value === "system" || value === "light" || value === "dark";
+  }
+
+  function cachedTheme(): ThemeMode {
+    try {
+      const value = localStorage.getItem("pigui.theme");
+      return isThemeMode(value) ? value : "system";
+    } catch {
+      return "system";
+    }
+  }
+
+  function applyTheme() {
+    const effective =
+      themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
+    document.documentElement.dataset.theme = effective;
+    document.documentElement.style.colorScheme = effective;
+    try {
+      localStorage.setItem("pigui.theme", themeMode);
+    } catch {
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const settings = await invoke<AppSettings>("get_settings");
+      if (isThemeMode(settings.theme)) {
+        themeMode = settings.theme;
+      }
+    } catch (cause) {
+      console.warn("Unable to load UI settings", cause);
+    }
+  }
+
+  async function selectTheme(mode: ThemeMode) {
+    themeMode = mode;
+    try {
+      await invoke("update_settings", { theme: mode });
+    } catch (cause) {
+      console.warn("Unable to persist theme setting", cause);
+    }
+  }
+
+  $effect(() => {
+    applyTheme();
+  });
+
   onMount(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    systemDark = media.matches;
+    const handleScheme = (event: MediaQueryListEvent) => {
+      systemDark = event.matches;
+    };
+    media.addEventListener("change", handleScheme);
+    void loadSettings();
     void refresh();
     const timer = setInterval(() => void refresh(), 2000);
-    return () => clearInterval(timer);
+    return () => {
+      media.removeEventListener("change", handleScheme);
+      clearInterval(timer);
+    };
   });
 </script>
 
@@ -327,12 +402,31 @@
       <span class="updated">
         {lastUpdated ? `updated ${lastUpdated}` : "connecting..."}
       </span>
-      <button onclick={() => void refresh()} disabled={refreshing}>
+      <div class="theme-switch" role="group" aria-label="Theme">
+        {#each themeOptions as option}
+          <button
+            type="button"
+            class:active={themeMode === option.id}
+            aria-pressed={themeMode === option.id}
+            title={`${option.label} theme`}
+            onclick={() => void selectTheme(option.id)}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
+      <button
+        class="refresh"
+        onclick={() => void refresh()}
+        disabled={refreshing}
+        aria-busy={refreshing}
+      >
         {refreshing ? "Refreshing" : "Refresh"}
       </button>
     </div>
   </header>
 
+  <div class="content">
   {#if error}
     <section class="banner error">
       <strong>Daemon unreachable.</strong>
@@ -468,11 +562,11 @@
         </section>
       </div>
 
-      <section class="panel">
+      <section class="panel fill">
         <div class="panel-header">
           <h2>Recent alerts</h2>
         </div>
-        <div class="table-wrap short">
+        <div class="table-wrap tall">
           <table>
             <thead><tr><th>Time</th><th>SID</th><th>Source</th><th>Destination</th><th>Action</th><th>Message</th></tr></thead>
             <tbody>
@@ -493,7 +587,7 @@
         </div>
       </section>
     {:else if tab === "connections"}
-      <section class="panel">
+      <section class="panel fill">
         <div class="panel-header">
           <h2>Live connections</h2>
           <input type="search" placeholder="Filter connections" bind:value={filter} />
@@ -527,11 +621,11 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel fill">
         <div class="panel-header">
           <h2>Completed connections from Snort</h2>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap tall">
           <table>
             <thead>
               <tr>
@@ -559,7 +653,7 @@
         </div>
       </section>
     {:else if tab === "processes"}
-      <section class="panel">
+      <section class="panel fill">
         <div class="panel-header">
           <h2>Processes</h2>
           <input type="search" placeholder="Filter processes" bind:value={filter} />
@@ -592,7 +686,7 @@
         </div>
       </section>
     {:else if tab === "destinations"}
-      <section class="panel">
+      <section class="panel fill">
         <div class="panel-header">
           <h2>Destinations</h2>
           <input type="search" placeholder="Filter destinations" bind:value={filter} />
@@ -626,7 +720,7 @@
         </div>
       </section>
     {:else if tab === "alerts"}
-      <section class="panel">
+      <section class="panel fill">
         <div class="panel-header">
           <h2>Alerts</h2>
           <input type="search" placeholder="Filter alerts" bind:value={filter} />
@@ -708,7 +802,10 @@
         </div>
       </section>
     {/if}
+  {/if}
+  </div>
 
+  {#if status}
     <footer>
       <span>database <code>{status.db_path}</code></span>
       <span>socket <code>{status.socket_path}</code></span>
@@ -718,56 +815,84 @@
 </main>
 
 <style>
-  main { max-width: 1500px; margin: 0 auto; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .logo { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(135deg, #266ca8, #38b28e); font-weight: 700; letter-spacing: 0.5px; }
+  main {
+    height: 100dvh;
+    width: 100%;
+    padding: clamp(12px, 1.6vw, 24px);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(10px, 1.2vw, 16px);
+    overflow: hidden;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .logo { width: 42px; height: 42px; flex-shrink: 0; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; letter-spacing: 0.5px; }
   h1 { margin: 0; font-size: 22px; letter-spacing: 0.3px; }
-  header p { margin: 2px 0 0; color: #8b98a6; font-size: 12px; }
-  .actions { display: flex; align-items: center; gap: 10px; }
-  .updated, .mode { color: #8b98a6; font-size: 12px; }
+  header p { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+  .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+  .updated, .mode { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+  .updated { min-width: 9.5rem; text-align: right; font-variant-numeric: tabular-nums; }
   .mode { text-transform: uppercase; letter-spacing: 0.6px; }
-  .pill { border-radius: 999px; padding: 4px 10px; font-size: 12px; background: rgba(56, 178, 142, 0.16); color: #6ee7b7; border: 1px solid rgba(56, 178, 142, 0.35); }
-  .pill.degraded { background: rgba(245, 158, 11, 0.14); color: #fbbf24; border-color: rgba(245, 158, 11, 0.35); }
-  .banner { border: 1px solid #2d3945; background: #151c23; border-radius: 10px; padding: 12px 14px; color: #c3ccd6; }
+  .refresh { width: 7.5rem; }
+  .pill { border-radius: 999px; padding: 4px 10px; font-size: 12px; background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); white-space: nowrap; }
+  .pill.degraded { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+  .theme-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border-strong); background: var(--surface-3); border-radius: 8px; }
+  .theme-switch button { border: 1px solid transparent; background: transparent; color: var(--text-muted); border-radius: 6px; padding: 4px 9px; font-size: 12px; }
+  .theme-switch button:hover { background: var(--surface-hover); color: var(--text); }
+  .theme-switch button.active { background: var(--surface-2); border-color: var(--border-strong); color: var(--text); }
+  .content { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: clamp(10px, 1.2vw, 16px); }
+  .banner { border: 1px solid var(--border-strong); background: var(--surface); border-radius: 10px; padding: 12px 14px; color: var(--text-code); flex-shrink: 0; }
   .banner ul { margin: 8px 0 0; padding-left: 20px; }
-  .banner.error { border-color: rgba(239, 68, 68, 0.45); background: rgba(127, 29, 29, 0.18); }
-  .banner.warning { border-color: rgba(245, 158, 11, 0.45); background: rgba(120, 53, 15, 0.16); }
-  .banner p { margin: 6px 0 0; color: #9aa7b5; }
-  .tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid #232d38; padding-bottom: 8px; }
-  .tabs button { border: 1px solid transparent; background: transparent; color: #8b98a6; border-radius: 7px; padding: 6px 12px; }
-  .tabs button:hover { background: #1a222b; color: #e5e9ee; }
-  .tabs button.active { background: #1a222b; color: #e5e9ee; border-color: #2d3945; }
-  .tabs .count { margin-left: 6px; font-size: 10px; color: #6ee7b7; }
-  .capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-  .capabilities article, .card { border: 1px solid #232d38; background: #141a21; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-  .label { color: #8b98a6; font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; }
+  .banner.error { border-color: var(--danger-border); background: var(--danger-bg-strong); }
+  .banner.warning { border-color: var(--warn-border); background: var(--warn-bg-strong); }
+  .banner p { margin: 6px 0 0; color: var(--text-muted); }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 8px; flex-shrink: 0; }
+  .tabs button { border: 1px solid transparent; background: transparent; color: var(--text-muted); border-radius: 7px; padding: 6px 12px; }
+  .tabs button:hover { background: var(--surface-3); color: var(--text); }
+  .tabs button.active { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+  .tabs .count { margin-left: 6px; font-size: 10px; color: var(--ok); }
+  .capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+  .capabilities article, .card { border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 10px; }
+  .label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; }
   .value { font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .value.ok { color: #6ee7b7; }
-  .value.warn { color: #fbbf24; }
-  .hint { color: #74808d; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .panel { border: 1px solid #232d38; background: #141a21; border-radius: 12px; overflow: hidden; }
-  .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #232d38; }
+  .value.ok { color: var(--ok); }
+  .value.warn { color: var(--warn); }
+  .hint { color: var(--text-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 12px; }
+  .panel { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  .panel.fill { flex: 1; min-height: 0; }
+  .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
   h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.2px; }
-  input[type="search"] { width: min(280px, 45vw); border: 1px solid #2d3945; background: #10161c; color: #e5e9ee; border-radius: 7px; padding: 6px 9px; font: inherit; }
-  .table-wrap { max-height: 360px; overflow: auto; }
-  .table-wrap.short { max-height: 250px; }
-  .table-wrap.tall { max-height: 600px; }
+  input[type="search"] { width: min(280px, 45vw); border: 1px solid var(--border-strong); background: var(--input-bg); color: var(--text); border-radius: 7px; padding: 6px 9px; font: inherit; }
+  .table-wrap { max-height: 360px; overflow: auto; min-width: 0; }
+  .table-wrap.short { max-height: clamp(180px, 30vh, 320px); }
+  .table-wrap.tall { max-height: clamp(240px, 45vh, 900px); }
+  .panel.fill .table-wrap.tall { flex: 1; max-height: none; min-height: 180px; }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th { position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 600; color: #9aa7b5; background: #18202a; padding: 9px 12px; border-bottom: 1px solid #232d38; white-space: nowrap; }
-  td { padding: 8px 12px; border-bottom: 1px solid #1c242d; white-space: nowrap; }
+  th { position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 600; color: var(--text-muted); background: var(--surface-2); padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   td.path { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
-  tbody tr:hover { background: #18202a; }
+  tbody tr:hover { background: var(--surface-2); }
   .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11.5px; }
-  .sub { color: #74808d; font-size: 11px; margin-top: 2px; }
-  .tag { display: inline-block; border-radius: 999px; padding: 2px 8px; background: rgba(148, 163, 184, 0.12); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
-  .tag.blocked { background: rgba(239, 68, 68, 0.14); color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
-  .empty { text-align: center; color: #74808d; padding: 24px; }
+  .sub { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+  .tag { display: inline-block; border-radius: 999px; padding: 2px 8px; background: var(--tag-bg); color: var(--tag-text); border: 1px solid var(--tag-border); }
+  .tag.blocked { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
+  .empty { text-align: center; color: var(--text-faint); padding: 24px; }
   .paths { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
-  .paths div { display: flex; gap: 12px; align-items: baseline; }
-  .paths code { color: #c3ccd6; word-break: break-all; }
-  footer { display: flex; flex-wrap: wrap; gap: 16px; color: #74808d; font-size: 11px; padding: 4px 2px 12px; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .paths div { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .paths code { color: var(--text-code); word-break: break-all; }
+  footer { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-faint); font-size: 11px; padding: 4px 2px 0; flex-shrink: 0; }
+  @media (max-width: 760px) {
+    .tabs { flex-wrap: nowrap; overflow-x: auto; }
+    .tabs button { white-space: nowrap; }
+    header p { display: none; }
+    .updated { display: none; }
+    .content { gap: 10px; }
+  }
+  @media (max-width: 560px) {
+    .actions { width: 100%; margin-left: 0; }
+    .theme-switch { order: 3; }
+    .paths div { flex-direction: column; gap: 2px; }
+  }
 </style>

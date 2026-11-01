@@ -3,6 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (() => {
+        try {
+          const cached = localStorage.getItem("pigui.theme");
+          const mode =
+            cached === "light" || cached === "dark" || cached === "system"
+              ? cached
+              : "system";
+          const prefersDark = window.matchMedia(
+            "(prefers-color-scheme: dark)",
+          ).matches;
+          const effective =
+            mode === "system" ? (prefersDark ? "dark" : "light") : mode;
+          document.documentElement.dataset.theme = effective;
+          document.documentElement.style.colorScheme = effective;
+        } catch {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
     <title>PIGUI</title>
   </head>
   <body>
