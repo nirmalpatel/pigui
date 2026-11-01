@@ -5,8 +5,11 @@ It combines Snort's detection telemetry with operating-system process
 attribution, a local manager daemon, a privileged firewall helper, and a GUI
 inspired by Activity Monitor.
 
-Status: design phase. This directory currently contains the architecture and
-implementation plan. No PIGUI code is implemented yet.
+Status: early implementation. Phase 1 (the first runnable vertical slice) is
+implemented: the Rust workspace, Snort discovery/capability probe, `alert_json`
+fixture ingestion into SQLite, a local daemon API, the CLI, and a Tauri 2 +
+Svelte shell. Live Snort supervision, OS collectors, PF enforcement, and rule
+bundles remain planned.
 
 Target platform: macOS first. Linux and Windows are planned as later platform
 adapters, not first-release requirements.
@@ -630,13 +633,13 @@ Development paths must not require writing to the parent Snort source tree.
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M0 | Branch, README, architecture, repository guardrails | Complete |
-| M1 | Rust workspace and Tauri scaffold | Planned |
-| M2 | Core models, config, SQLite schema, fixture parsers | Planned |
-| M3 | Snort discovery, config generation, control adapter, log ingestion | Planned |
+| M1 | Rust workspace and Tauri scaffold | Complete |
+| M2 | Core models, config, SQLite schema, fixture parsers | Partial: alerts/destinations schema and parser complete |
+| M3 | Snort discovery, config generation, control adapter, log ingestion | Partial: discovery, probe, fixture tailing complete; live control adapter pending |
 | M4 | macOS process/socket collector and correlation | Planned |
 | M5 | Rule bundle manager and validation pipeline | Planned |
 | M6 | PF helper in dry-run mode | Planned |
-| M7 | Daemon API and GUI MVP | Planned |
+| M7 | Daemon API and GUI MVP | Partial: status/alerts/destinations API and shell complete |
 | M8 | launchd packaging and macOS system integration | Planned |
 | M9 | Hardening, retention, audit, tests, documentation | Planned |
 | M10 | Linux/ufw/nftables and Windows research | Later |
@@ -685,10 +688,10 @@ PIGUI is intended to be GPLv2-compatible while it lives inside the Snort 3
 repository. Confirm the final licensing and distribution model before any
 closed-source distribution or separate commercial packaging.
 
-## Immediate Next Step
+## Phase 1 Quick Start
 
-Create the Rust workspace and Tauri application skeleton under `pigui/` without
-touching the parent Snort build. The first runnable milestone should:
+Phase 1 implements the first runnable vertical slice without touching the
+parent Snort build:
 
 1. Resolve the parent Snort binary, defaulting to `../build/src/snort` without
    installing Snort system-wide.
@@ -696,3 +699,33 @@ touching the parent Snort build. The first runnable milestone should:
 3. Normalize alerts into SQLite.
 4. Display alerts and destinations in a minimal Tauri window.
 5. Report Snort capability status, including whether the control socket exists.
+
+```bash
+cd pigui
+cp .env.example .env        # optional; scripts fall back to .env.example
+
+./scripts/probe-snort.sh    # resolve Snort and print capabilities
+./scripts/run-dev.sh        # daemon on the fixture, then the Tauri window
+```
+
+Headless checks:
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+
+./target/debug/pigui-cli ingest \
+  --file tests/fixtures/alert_json/valid.jsonl
+
+./target/debug/pigui-daemon \
+  --alerts-file tests/fixtures/alert_json/valid.jsonl
+
+# in another shell
+./target/debug/pigui-cli status
+./target/debug/pigui-cli alerts --limit 10
+./target/debug/pigui-cli destinations --limit 10
+```
+
+The daemon replays the alert file from the beginning on startup and relies on
+the SQLite dedupe index, so restarting it does not duplicate events. Use
+`--from-end` to skip existing content once live Snort output is wired in.

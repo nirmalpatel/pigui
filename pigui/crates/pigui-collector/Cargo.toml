@@ -1,0 +1,9 @@
+[package]
+name = "pigui-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pigui-core.workspace = true
+serde.workspace = true

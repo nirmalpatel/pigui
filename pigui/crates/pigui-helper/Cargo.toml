@@ -1,0 +1,8 @@
+[package]
+name = "pigui-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pigui-core.workspace = true

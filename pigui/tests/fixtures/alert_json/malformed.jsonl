@@ -1,0 +1,4 @@
+{not valid json}
+{"seconds":1750000010,"proto":"TCP"}
+{"sid":1000006,"proto":"UDP"}
+{"seconds":1750000011,"sid":1000007,"src_port":"not-a-number"}

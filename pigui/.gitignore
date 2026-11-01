@@ -1,6 +1,7 @@
 target/
 node_modules/
 dist/
+apps/pigui-gui/src-tauri/gen/
 .venv/
 .env
 .env.local

@@ -1,0 +1,13 @@
+[package]
+name = "pigui-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+pigui-core.workspace = true
+pigui-daemon.workspace = true
+pigui-snort.workspace = true
+serde_json.workspace = true
