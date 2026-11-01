@@ -316,6 +316,15 @@ endpoints
   bytes_in, bytes_out, connection_count, process_count,
   alert_count, reputation, blocked
 
+domains
+  domain, registrable_domain, first_seen, last_seen, observation_count
+
+endpoint_domains
+  ip, domain, server_port, source, first_seen, last_seen, observation_count
+
+domain_trust
+  registrable_domain, state, note, updated_at
+
 alerts
   event_id, ts, gid, sid, rev, priority, class, msg,
   src_ip, src_port, dst_ip, dst_port, proto, action,
@@ -458,7 +467,8 @@ Primary views:
 | Overview | Health, throughput, drops, alerts, top processes, top destinations |
 | Processes | Activity Monitor-style process list with traffic and risk |
 | Connections | Live connection/flow table with process attribution |
-| Destinations | Remote endpoints, domains, bytes, processes, alerts, block state |
+| Destinations | Remote endpoints, observed domains, bytes, processes, alerts, block state |
+| Domains | Registrable domains, hostnames, trust state, review flags, first/last seen |
 | Alerts | Triage, severity, rule, process, destination, actions |
 | Rules | Bundles, validation, activation, hit counts, rollback |
 | Firewall | Blocks, TTLs, allowlist, dry-run state, audit |
@@ -468,13 +478,20 @@ Primary views:
 Key interactions:
 
 - Sort and filter like Activity Monitor.
-- Expand a process to see its connections and destinations.
-- Drill from an alert to the process and destination.
-- Drill from a destination to all processes and alerts.
+- Expand a process to see its destinations, domains, and trust state.
+- Expand a destination to see its processes and recent alerts.
+- Mark registrable domains as trusted, unknown, suspicious, or ignored.
+- Filter domains by trust state and a "needs review" queue.
 - Show "would block" versus "blocked" clearly.
 - Confirm all enforcement actions.
 - Surface degraded modes when Snort, the control socket, or the helper is
   unavailable.
+
+Domain trust is scoped to the registrable domain (for example, `spotify.com`
+covers `api.spotify.com`). Unknown domains form the default review queue.
+Trusted domains are still shown when they have alerts or invalid TLS. Valid TLS
+is not treated as trust. Destinations without an observed DNS/TLS/HTTP/QUIC
+hostname are flagged as `no domain` rather than guessed.
 
 ## Security Model
 

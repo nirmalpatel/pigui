@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// A remote (destination) endpoint observed in alerts.
+use crate::models::domain::{EndpointDomain, ReviewFlag, TrustState};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Destination {
     pub ip: String,
@@ -14,4 +15,10 @@ pub struct Destination {
     pub alert_count: u64,
     pub reputation: i64,
     pub blocked: bool,
+    #[serde(default)]
+    pub domains: Vec<EndpointDomain>,
+    #[serde(default)]
+    pub trust_state: TrustState,
+    #[serde(default)]
+    pub flags: Vec<ReviewFlag>,
 }

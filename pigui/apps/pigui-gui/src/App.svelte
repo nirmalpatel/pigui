@@ -68,6 +68,41 @@
     total: number;
   }
 
+  type TrustState = "unknown" | "trusted" | "suspicious" | "ignored";
+  type ReviewFlag =
+    | "new_domain"
+    | "no_domain"
+    | "invalid_tls"
+    | "alerts"
+    | "unknown_trust";
+
+  interface EndpointDomain {
+    domain: string;
+    registrable_domain: string;
+    source: string;
+    server_port?: number;
+    trust_state: TrustState;
+    first_seen: number;
+    last_seen: number;
+  }
+
+  interface DomainSummary {
+    domain: string;
+    hostnames: string[];
+    trust_state: TrustState;
+    first_seen: number;
+    last_seen: number;
+    observation_count: number;
+    endpoint_count: number;
+    process_count: number;
+    flags: ReviewFlag[];
+  }
+
+  interface DomainList {
+    domains: DomainSummary[];
+    total: number;
+  }
+
   interface Destination {
     ip: string;
     hostname?: string;
@@ -79,11 +114,45 @@
     process_count: number;
     alert_count: number;
     blocked: boolean;
+    domains: EndpointDomain[];
+    trust_state: TrustState;
+    flags: ReviewFlag[];
   }
 
   interface DestinationList {
     destinations: Destination[];
     total: number;
+  }
+
+  interface DestinationProcess {
+    pid?: number;
+    process_name?: string;
+    bytes_in: number;
+    bytes_out: number;
+    connection_count: number;
+    last_seen: number;
+  }
+
+  interface DestinationDetail {
+    destination: Destination;
+    processes: DestinationProcess[];
+    recent_alerts: AlertRecord[];
+  }
+
+  interface ProcessDestination {
+    ip: string;
+    domains: EndpointDomain[];
+    trust_state: TrustState;
+    flags: ReviewFlag[];
+    bytes_in: number;
+    bytes_out: number;
+    connection_count: number;
+    last_seen: number;
+  }
+
+  interface ProcessDetail {
+    process: Process;
+    destinations: ProcessDestination[];
   }
 
   interface Flow {
@@ -153,6 +222,7 @@
     | "connections"
     | "processes"
     | "destinations"
+    | "domains"
     | "alerts"
     | "capture";
 
@@ -163,6 +233,13 @@
   let flows = $state<Flow[]>([]);
   let processes = $state<Process[]>([]);
   let connections = $state<Connection[]>([]);
+  let domains = $state<DomainSummary[]>([]);
+  let domainTrustFilter = $state("all");
+  let expandedProcess = $state<number | null>(null);
+  let processDetail = $state<ProcessDetail | null>(null);
+  let expandedDestination = $state<string | null>(null);
+  let destinationDetail = $state<DestinationDetail | null>(null);
+  let detailLoading = $state(false);
   let error = $state<string | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -197,7 +274,30 @@
     filterItems(destinations, filter, (destination) => [
       destination.ip,
       destination.hostname,
+      destination.trust_state,
+      ...destination.domains.map((domain) => domain.domain),
     ]),
+  );
+
+  const filteredDomains = $derived.by(() => {
+    const text = filter.trim().toLowerCase();
+    return domains.filter((domain) => {
+      const matchesTrust =
+        domainTrustFilter === "all" ||
+        (domainTrustFilter === "needs_review"
+          ? needsReview(domain)
+          : domain.trust_state === domainTrustFilter);
+      const matchesText =
+        !text ||
+        [domain.domain, ...domain.hostnames].some((value) =>
+          value.toLowerCase().includes(text),
+        );
+      return matchesTrust && matchesText;
+    });
+  });
+
+  const needsReviewCount = $derived(
+    domains.filter((domain) => needsReview(domain)).length,
   );
 
   const filteredAlerts = $derived(
@@ -238,6 +338,7 @@
     { id: "connections", label: "Connections" },
     { id: "processes", label: "Processes" },
     { id: "destinations", label: "Destinations" },
+    { id: "domains", label: "Domains" },
     { id: "alerts", label: "Alerts" },
     { id: "capture", label: "Capture" },
   ];
@@ -258,6 +359,7 @@
         nextFlows,
         nextProcesses,
         nextConnections,
+        nextDomains,
       ] = await Promise.all([
         invoke<StatusPayload>("get_status"),
         invoke<AlertList>("list_alerts", { limit: 200 }),
@@ -265,6 +367,7 @@
         invoke<FlowList>("list_flows", { limit: 300 }),
         invoke<ProcessList>("list_processes", { limit: 200 }),
         invoke<ConnectionList>("list_connections", { limit: 200 }),
+        invoke<DomainList>("list_domains", { limit: 300 }),
       ]);
       status = nextStatus;
       alerts = nextAlerts.alerts;
@@ -272,6 +375,7 @@
       flows = nextFlows.flows;
       processes = nextProcesses.processes;
       connections = nextConnections.connections;
+      domains = nextDomains.domains;
       error = null;
       lastUpdated = new Date().toLocaleTimeString();
     } catch (cause) {
@@ -316,6 +420,103 @@
   function endpoint(ip?: string, port?: number): string {
     if (!ip) return "-";
     return port ? `${ip}:${port}` : ip;
+  }
+
+  function needsReview(item: {
+    trust_state: TrustState;
+    flags: ReviewFlag[];
+  }): boolean {
+    if (item.trust_state === "ignored") return false;
+    if (item.trust_state === "unknown" || item.trust_state === "suspicious") {
+      return true;
+    }
+    return item.flags.some(
+      (flag) =>
+        flag === "no_domain" || flag === "invalid_tls" || flag === "alerts",
+    );
+  }
+
+  function domainLabel(list: EndpointDomain[]): string {
+    if (!list.length) return "no domain";
+    const names = list.slice(0, 3).map((domain) => domain.domain);
+    const extra = list.length > 3 ? ` +${list.length - 3}` : "";
+    return `${names.join(", ")}${extra}`;
+  }
+
+  function flagLabel(flag: ReviewFlag): string {
+    switch (flag) {
+      case "new_domain":
+        return "new";
+      case "no_domain":
+        return "no domain";
+      case "invalid_tls":
+        return "invalid TLS";
+      case "alerts":
+        return "alerts";
+      case "unknown_trust":
+        return "unknown";
+    }
+  }
+
+  async function toggleProcess(pid: number) {
+    if (expandedProcess === pid) {
+      expandedProcess = null;
+      processDetail = null;
+      return;
+    }
+    expandedProcess = pid;
+    processDetail = null;
+    detailLoading = true;
+    try {
+      processDetail = await invoke<ProcessDetail>("process_detail", { pid });
+    } catch (cause) {
+      console.warn("Unable to load process detail", cause);
+      expandedProcess = null;
+    } finally {
+      detailLoading = false;
+    }
+  }
+
+  async function toggleDestination(ip: string) {
+    if (expandedDestination === ip) {
+      expandedDestination = null;
+      destinationDetail = null;
+      return;
+    }
+    expandedDestination = ip;
+    destinationDetail = null;
+    detailLoading = true;
+    try {
+      destinationDetail = await invoke<DestinationDetail>("destination_detail", {
+        ip,
+      });
+    } catch (cause) {
+      console.warn("Unable to load destination detail", cause);
+      expandedDestination = null;
+    } finally {
+      detailLoading = false;
+    }
+  }
+
+  async function setTrust(domain: string, state: TrustState) {
+    try {
+      await invoke("set_domain_trust", {
+        registrableDomain: domain,
+        state,
+        note: null,
+      });
+      await refresh();
+    } catch (cause) {
+      console.warn("Unable to update domain trust", cause);
+    }
+  }
+
+  function resetDetails() {
+    expandedProcess = null;
+    processDetail = null;
+    expandedDestination = null;
+    destinationDetail = null;
+    detailLoading = false;
   }
 
   function isThemeMode(value: unknown): value is ThemeMode {
@@ -462,6 +663,7 @@
           onclick={() => {
             tab = item.id;
             filter = "";
+            resetDetails();
           }}
         >
           {item.label}
@@ -469,6 +671,10 @@
             <span class="count">{flows.length}</span>
           {:else if item.id === "processes" && processes.length}
             <span class="count">{processes.length}</span>
+          {:else if item.id === "destinations" && destinations.length}
+            <span class="count">{destinations.length}</span>
+          {:else if item.id === "domains" && needsReviewCount > 0}
+            <span class="count review-count">{needsReviewCount}</span>
           {:else if item.id === "alerts" && alerts.length}
             <span class="count">{alerts.length}</span>
           {/if}
@@ -509,6 +715,13 @@
           <span class="label">Destinations</span>
           <span class="value">{status.destination_count}</span>
           <span class="hint">known remote endpoints</span>
+        </article>
+        <article>
+          <span class="label">Needs review</span>
+          <span class="value" class:warn={needsReviewCount > 0}>
+            {needsReviewCount}
+          </span>
+          <span class="hint">unknown or flagged domains</span>
         </article>
       </section>
 
@@ -662,13 +875,18 @@
           <table>
             <thead>
               <tr>
-                <th>Process</th><th>PID</th><th>User</th><th>Connections</th>
+                <th></th><th>Process</th><th>PID</th><th>User</th><th>Connections</th>
                 <th>Bytes in</th><th>Bytes out</th><th>Path</th><th>Last seen</th>
               </tr>
             </thead>
             <tbody>
               {#each filteredProcesses as process (process.pid)}
-                <tr>
+                <tr
+                  class="clickable"
+                  class:open={expandedProcess === process.pid}
+                  onclick={() => void toggleProcess(process.pid)}
+                >
+                  <td class="expand">{expandedProcess === process.pid ? "−" : "+"}</td>
                   <td>{process.name}</td>
                   <td class="mono">{process.pid}</td>
                   <td>{process.user ?? "-"}</td>
@@ -678,8 +896,43 @@
                   <td class="mono path">{process.path ?? "-"}</td>
                   <td class="mono">{formatTime(process.last_seen)}</td>
                 </tr>
+                {#if expandedProcess === process.pid}
+                  <tr class="detail-row">
+                    <td colspan="9">
+                      <div class="detail-block">
+                        <div class="detail-heading">Destinations and domains</div>
+                        {#if processDetail}
+                          <table class="inner">
+                            <thead>
+                              <tr><th>Destination</th><th>Domains</th><th>Trust</th><th>Flags</th><th>Traffic in/out</th><th>Conns</th><th>Last seen</th></tr>
+                            </thead>
+                            <tbody>
+                              {#each processDetail.destinations as destination (destination.ip)}
+                                <tr>
+                                  <td class="mono">{destination.ip}</td>
+                                  <td>{domainLabel(destination.domains)}</td>
+                                  <td><span class="tag {destination.trust_state}">{destination.trust_state}</span></td>
+                                  <td>{destination.flags.length ? destination.flags.map(flagLabel).join(", ") : "-"}</td>
+                                  <td class="mono">{formatBytes(destination.bytes_in)} / {formatBytes(destination.bytes_out)}</td>
+                                  <td>{destination.connection_count}</td>
+                                  <td class="mono">{formatTime(destination.last_seen)}</td>
+                                </tr>
+                              {:else}
+                                <tr><td class="empty" colspan="7">No attributed destinations for this process.</td></tr>
+                              {/each}
+                            </tbody>
+                          </table>
+                        {:else}
+                          <div class="detail-note">
+                            {detailLoading ? "Loading destinations..." : "No destinations."}
+                          </div>
+                        {/if}
+                      </div>
+                    </td>
+                  </tr>
+                {/if}
               {:else}
-                <tr><td class="empty" colspan="8">No processes captured yet.</td></tr>
+                <tr><td class="empty" colspan="9">No processes captured yet.</td></tr>
               {/each}
             </tbody>
           </table>
@@ -695,15 +948,23 @@
           <table>
             <thead>
               <tr>
-                <th>IP</th><th>Hostname</th><th>Processes</th><th>Connections</th>
-                <th>Alerts</th><th>Bytes in</th><th>Bytes out</th><th>First seen</th><th>Last seen</th>
+                <th></th><th>IP</th><th>Domains</th><th>Trust</th><th>Flags</th><th>Processes</th>
+                <th>Connections</th><th>Alerts</th><th>Bytes in</th><th>Bytes out</th>
+                <th>First seen</th><th>Last seen</th>
               </tr>
             </thead>
             <tbody>
               {#each filteredDestinations as destination (destination.ip)}
-                <tr>
+                <tr
+                  class="clickable"
+                  class:open={expandedDestination === destination.ip}
+                  onclick={() => void toggleDestination(destination.ip)}
+                >
+                  <td class="expand">{expandedDestination === destination.ip ? "−" : "+"}</td>
                   <td class="mono">{destination.ip}</td>
-                  <td>{destination.hostname ?? "-"}</td>
+                  <td>{domainLabel(destination.domains)}</td>
+                  <td><span class="tag {destination.trust_state}">{destination.trust_state}</span></td>
+                  <td>{destination.flags.length ? destination.flags.map(flagLabel).join(", ") : "-"}</td>
                   <td>{destination.process_count}</td>
                   <td>{destination.connection_count}</td>
                   <td>{destination.alert_count}</td>
@@ -712,8 +973,103 @@
                   <td class="mono">{formatTime(destination.first_seen)}</td>
                   <td class="mono">{formatTime(destination.last_seen)}</td>
                 </tr>
+                {#if expandedDestination === destination.ip}
+                  <tr class="detail-row">
+                    <td colspan="12">
+                      <div class="detail-block">
+                        <div class="detail-heading">Processes using this destination</div>
+                        {#if destinationDetail}
+                          <table class="inner">
+                            <thead>
+                              <tr><th>Process</th><th>PID</th><th>Traffic in/out</th><th>Connections</th><th>Last seen</th></tr>
+                            </thead>
+                            <tbody>
+                              {#each destinationDetail.processes as process (process.pid ?? process.process_name)}
+                                <tr>
+                                  <td>{process.process_name ?? "-"}</td>
+                                  <td class="mono">{process.pid ?? "-"}</td>
+                                  <td class="mono">{formatBytes(process.bytes_in)} / {formatBytes(process.bytes_out)}</td>
+                                  <td>{process.connection_count}</td>
+                                  <td class="mono">{formatTime(process.last_seen)}</td>
+                                </tr>
+                              {:else}
+                                <tr><td class="empty" colspan="5">No process attribution for this destination.</td></tr>
+                              {/each}
+                            </tbody>
+                          </table>
+                        {:else}
+                          <div class="detail-note">
+                            {detailLoading ? "Loading processes..." : "No processes."}
+                          </div>
+                        {/if}
+                      </div>
+                    </td>
+                  </tr>
+                {/if}
               {:else}
-                <tr><td class="empty" colspan="9">No destinations observed yet.</td></tr>
+                <tr><td class="empty" colspan="12">No destinations observed yet.</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {:else if tab === "domains"}
+      <section class="panel fill">
+        <div class="panel-header">
+          <h2>Domains</h2>
+          <div class="panel-tools">
+            <select bind:value={domainTrustFilter} aria-label="Trust filter">
+              <option value="all">All domains</option>
+              <option value="needs_review">Needs review</option>
+              <option value="trusted">Trusted</option>
+              <option value="unknown">Unknown</option>
+              <option value="suspicious">Suspicious</option>
+              <option value="ignored">Ignored</option>
+            </select>
+            <input type="search" placeholder="Filter domains" bind:value={filter} />
+          </div>
+        </div>
+        <div class="table-wrap tall">
+          <table>
+            <thead>
+              <tr>
+                <th>Registrable domain</th><th>Hostnames</th><th>Trust</th><th>Flags</th>
+                <th>IPs</th><th>Processes</th><th>Observed</th><th>First seen</th>
+                <th>Last seen</th><th>Mark</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each filteredDomains as domain (domain.domain)}
+                <tr>
+                  <td class="domain">{domain.domain}</td>
+                  <td class="sub">{domain.hostnames.join(", ")}</td>
+                  <td><span class="tag {domain.trust_state}">{domain.trust_state}</span></td>
+                  <td>{domain.flags.length ? domain.flags.map(flagLabel).join(", ") : "-"}</td>
+                  <td>{domain.endpoint_count}</td>
+                  <td>{domain.process_count}</td>
+                  <td>{domain.observation_count}</td>
+                  <td class="mono">{formatTime(domain.first_seen)}</td>
+                  <td class="mono">{formatTime(domain.last_seen)}</td>
+                  <td>
+                    <select
+                      value={domain.trust_state}
+                      aria-label={`Trust ${domain.domain}`}
+                      onchange={(event) =>
+                        void setTrust(
+                          domain.domain,
+                          (event.currentTarget as HTMLSelectElement)
+                            .value as TrustState,
+                        )}
+                    >
+                      <option value="unknown">Unknown</option>
+                      <option value="trusted">Trust</option>
+                      <option value="suspicious">Suspicious</option>
+                      <option value="ignored">Ignore</option>
+                    </select>
+                  </td>
+                </tr>
+              {:else}
+                <tr><td class="empty" colspan="10">No domains observed yet.</td></tr>
               {/each}
             </tbody>
           </table>
@@ -878,6 +1234,25 @@
   .sub { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
   .tag { display: inline-block; border-radius: 999px; padding: 2px 8px; background: var(--tag-bg); color: var(--tag-text); border: 1px solid var(--tag-border); }
   .tag.blocked { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
+  .tag.trusted { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
+  .tag.unknown { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+  .tag.suspicious { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
+  .tag.ignored { background: var(--tag-bg); color: var(--text-faint); border-color: var(--tag-border); }
+  .tag.trust { white-space: nowrap; }
+  .review-count { color: var(--warn); }
+  .panel-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  select { border: 1px solid var(--border-strong); background: var(--input-bg); color: var(--text); border-radius: 7px; padding: 6px 9px; font: inherit; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable td.expand { color: var(--text-faint); font-weight: 600; width: 24px; text-align: center; }
+  tr.open td { background: var(--surface-2); }
+  tr.detail-row td { background: var(--surface-2); padding: 12px 14px; white-space: normal; }
+  .detail-block { display: flex; flex-direction: column; gap: 8px; }
+  .detail-heading { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; }
+  .detail-note { color: var(--text-muted); font-size: 12px; }
+  table.inner { font-size: 12px; }
+  table.inner th { background: transparent; }
+  table.inner td { white-space: nowrap; }
+  .domain { font-weight: 600; }
   .empty { text-align: center; color: var(--text-faint); padding: 24px; }
   .paths { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
   .paths div { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }

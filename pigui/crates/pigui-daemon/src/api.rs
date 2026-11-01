@@ -3,11 +3,13 @@ use std::sync::Arc;
 
 use pigui_core::error::{Error, Result};
 use pigui_core::rpc::{
-    AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, FlowList, HealthPayload,
-    HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST,
-    METHOD_DNS_LIST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST, METHOD_PROCESSES_LIST,
-    METHOD_QUIC_LIST, METHOD_SHUTDOWN, METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST,
-    ProcessList, QuicList, Request, Response, SnortStatusPayload, StatusPayload, TlsList,
+    AlertList, AlertsQuery, ConnectionList, DestinationList, DestinationQuery, DnsList, DomainList,
+    FlowList, HealthPayload, HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST,
+    METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
+    METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST,
+    METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_QUIC_LIST, METHOD_SHUTDOWN,
+    METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST, ProcessList, ProcessQuery, QuicList,
+    Request, Response, SetTrustRequest, SnortStatusPayload, StatusPayload, TlsList,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -89,9 +91,13 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
         }
         METHOD_ALERTS_LIST => list_alerts(state, request.params),
         METHOD_DESTINATIONS_LIST => list_destinations(state, request.params),
+        METHOD_DESTINATIONS_DETAIL => destination_detail(state, request.params),
         METHOD_FLOWS_LIST => list_flows(state, request.params),
         METHOD_PROCESSES_LIST => list_processes(state, request.params),
+        METHOD_PROCESSES_DETAIL => process_detail(state, request.params),
         METHOD_CONNECTIONS_LIST => list_connections(state, request.params),
+        METHOD_DOMAINS_LIST => list_domains(state, request.params),
+        METHOD_DOMAINS_SET_TRUST => set_domain_trust(state, request.params),
         METHOD_DNS_LIST => list_dns(state, request.params),
         METHOD_TLS_LIST => list_tls(state, request.params),
         METHOD_HTTP_LIST => list_http(state, request.params),
@@ -201,6 +207,40 @@ fn list_destinations(state: &AppState, params: Value) -> Result<Value> {
         destinations,
         total,
     })?)
+}
+
+fn destination_detail(state: &AppState, params: Value) -> Result<Value> {
+    let query: DestinationQuery = serde_json::from_value(params)?;
+    let detail = query_store(state, |store| store.destination_detail(&query.ip))?
+        .ok_or_else(|| Error::Rpc(format!("destination not found: {}", query.ip)))?;
+    Ok(serde_json::to_value(detail)?)
+}
+
+fn process_detail(state: &AppState, params: Value) -> Result<Value> {
+    let query: ProcessQuery = serde_json::from_value(params)?;
+    let detail = query_store(state, |store| store.process_detail(query.pid))?
+        .ok_or_else(|| Error::Rpc(format!("process not found: {}", query.pid)))?;
+    Ok(serde_json::to_value(detail)?)
+}
+
+fn list_domains(state: &AppState, params: Value) -> Result<Value> {
+    let (limit, offset) = query_limits(params);
+    let (domains, total) = query_store(state, |store| {
+        Ok((store.list_domains(limit, offset)?, store.count_domains()?))
+    })?;
+    Ok(serde_json::to_value(DomainList { domains, total })?)
+}
+
+fn set_domain_trust(state: &AppState, params: Value) -> Result<Value> {
+    let request: SetTrustRequest = serde_json::from_value(params)?;
+    query_store(state, |store| {
+        store.set_domain_trust(
+            &request.registrable_domain,
+            request.state,
+            request.note.as_deref(),
+        )
+    })?;
+    Ok(Value::from(true))
 }
 
 fn list_flows(state: &AppState, params: Value) -> Result<Value> {

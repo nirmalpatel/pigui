@@ -7,9 +7,11 @@ use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
 use pigui_core::models::{Alert, ExtractorRecord, SnortCapabilities};
 use pigui_core::rpc::{
-    AlertList, ConnectionList, DestinationList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST,
-    METHOD_DESTINATIONS_LIST, METHOD_FLOWS_LIST, METHOD_PROCESSES_LIST, METHOD_SHUTDOWN,
-    METHOD_STATUS, ProcessList, StatusPayload,
+    AlertList, ConnectionList, DestinationDetail, DestinationList, DomainList, METHOD_ALERTS_LIST,
+    METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST,
+    METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL,
+    METHOD_PROCESSES_LIST, METHOD_SHUTDOWN, METHOD_STATUS, ProcessDetail, ProcessList,
+    StatusPayload,
 };
 use pigui_daemon::api;
 use pigui_daemon::state::AppState;
@@ -92,6 +94,11 @@ async fn serves_status_alerts_and_destinations() {
     )
     .unwrap();
     store.insert_extractor_records(&[record], 1001).unwrap();
+    let tls = ExtractorRecord::parse(
+        r#"{"ts":1002,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"api.spotify.com","version":"TLSv1.3","validation_status":"valid"}"#,
+    )
+    .unwrap();
+    store.insert_extractor_records(&[tls], 1002).unwrap();
 
     let state = Arc::new(AppState::new(
         config.clone(),
@@ -148,6 +155,34 @@ async fn serves_status_alerts_and_destinations() {
         .unwrap();
     assert_eq!(connections.connections.len(), 1);
     assert_eq!(connections.connections[0].pid, Some(42));
+
+    let detail: DestinationDetail = client
+        .call_typed(METHOD_DESTINATIONS_DETAIL, json!({ "ip": "198.51.100.10" }))
+        .unwrap();
+    assert_eq!(detail.destination.domains.len(), 1);
+    assert_eq!(detail.processes[0].pid, Some(42));
+
+    let process_detail: ProcessDetail = client
+        .call_typed(METHOD_PROCESSES_DETAIL, json!({ "pid": 42 }))
+        .unwrap();
+    assert_eq!(process_detail.destinations.len(), 1);
+
+    let domains: DomainList = client
+        .call_typed(METHOD_DOMAINS_LIST, json!({ "limit": 10 }))
+        .unwrap();
+    assert_eq!(domains.total, 1);
+    assert_eq!(domains.domains[0].domain, "spotify.com");
+
+    client
+        .call(
+            METHOD_DOMAINS_SET_TRUST,
+            json!({ "registrable_domain": "spotify.com", "state": "trusted" }),
+        )
+        .unwrap();
+    let domains: DomainList = client
+        .call_typed(METHOD_DOMAINS_LIST, json!({ "limit": 10 }))
+        .unwrap();
+    assert_eq!(domains.domains[0].trust_state.as_str(), "trusted");
 
     client.call(METHOD_SHUTDOWN, json!({})).unwrap();
     tokio::time::timeout(Duration::from_secs(2), server)

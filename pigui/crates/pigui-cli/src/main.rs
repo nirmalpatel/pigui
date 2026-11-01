@@ -5,10 +5,11 @@ use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
 use pigui_core::paths::resolve_snort;
 use pigui_core::rpc::{
-    AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, FlowList, HttpList,
-    METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST,
-    METHOD_FLOWS_LIST, METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST,
-    ProcessList, StatusPayload, TlsList,
+    AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, DomainList, FlowList,
+    HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST,
+    METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST,
+    METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST, ProcessList,
+    StatusPayload, TlsList,
 };
 use pigui_daemon::ingest;
 use pigui_daemon::store::Store;
@@ -78,6 +79,19 @@ enum Command {
         limit: u32,
         #[arg(long)]
         json: bool,
+    },
+    /// List observed domains grouped by registrable domain.
+    Domains {
+        #[arg(long, default_value_t = 40)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set trust for a registrable domain.
+    Trust {
+        domain: String,
+        #[arg(value_parser = ["unknown", "trusted", "suspicious", "ignored"])]
+        state: String,
     },
     /// List HTTP observations.
     Http {
@@ -200,6 +214,27 @@ fn main() -> anyhow::Result<()> {
             } else {
                 print_connections(&list);
             }
+        }
+        Command::Domains { limit, json } => {
+            let list: DomainList = client(&config).call_typed(
+                METHOD_DOMAINS_LIST,
+                serde_json::to_value(AlertsQuery {
+                    limit: Some(limit),
+                    offset: None,
+                })?,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_domains(&list);
+            }
+        }
+        Command::Trust { domain, state } => {
+            let result = client(&config).call(
+                METHOD_DOMAINS_SET_TRUST,
+                json!({ "registrable_domain": domain, "state": state }),
+            )?;
+            println!("{result}");
         }
         Command::Dns { limit, json } => {
             let list: DnsList = client(&config).call_typed(
@@ -411,18 +446,38 @@ fn print_destinations(list: &DestinationList) {
         list.destinations.len()
     );
     println!(
-        "{:<24} {:<28} {:<8} {:<10} {:<10} blocked",
-        "ip", "hostname", "alerts", "processes", "flow bytes"
+        "{:<24} {:<28} {:<10} {:<8} {:<10} {:<10} blocked",
+        "ip", "hostname", "trust", "alerts", "processes", "flow bytes"
     );
     for destination in &list.destinations {
         println!(
-            "{:<24} {:<28} {:<8} {:<10} {:<10} {}",
+            "{:<24} {:<28} {:<10} {:<8} {:<10} {:<10} {}",
             destination.ip,
             destination.hostname.as_deref().unwrap_or("-"),
+            destination.trust_state,
             destination.alert_count,
             destination.process_count,
             destination.bytes_in + destination.bytes_out,
             yes_no(destination.blocked),
+        );
+    }
+}
+
+fn print_domains(list: &DomainList) {
+    println!("{} domains (showing {})", list.total, list.domains.len());
+    println!(
+        "{:<32} {:<10} {:<8} {:<10} {:<10} hostnames",
+        "domain", "trust", "ips", "processes", "observed"
+    );
+    for domain in &list.domains {
+        println!(
+            "{:<32} {:<10} {:<8} {:<10} {:<10} {}",
+            domain.domain,
+            domain.trust_state,
+            domain.endpoint_count,
+            domain.process_count,
+            domain.observation_count,
+            domain.hostnames.join(","),
         );
     }
 }

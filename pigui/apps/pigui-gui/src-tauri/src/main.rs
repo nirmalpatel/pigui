@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
 use pigui_core::rpc::{
-    METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST, METHOD_FLOWS_LIST,
-    METHOD_PROCESSES_LIST, METHOD_STATUS,
+    METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL,
+    METHOD_DESTINATIONS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST,
+    METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_STATUS,
 };
 use pigui_core::settings::{AppSettings, ThemeMode};
 use serde_json::{Value, json};
@@ -105,6 +106,48 @@ fn list_connections(limit: Option<u32>) -> Result<Value, String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn destination_detail(ip: String) -> Result<Value, String> {
+    client()?
+        .call(METHOD_DESTINATIONS_DETAIL, json!({ "ip": ip }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn process_detail(pid: u32) -> Result<Value, String> {
+    client()?
+        .call(METHOD_PROCESSES_DETAIL, json!({ "pid": pid }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_domains(limit: Option<u32>) -> Result<Value, String> {
+    client()?
+        .call(
+            METHOD_DOMAINS_LIST,
+            json!({ "limit": limit.unwrap_or(300) }),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_domain_trust(
+    registrable_domain: String,
+    state: String,
+    note: Option<String>,
+) -> Result<Value, String> {
+    client()?
+        .call(
+            METHOD_DOMAINS_SET_TRUST,
+            json!({
+                "registrable_domain": registrable_domain,
+                "state": state,
+                "note": note,
+            }),
+        )
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     prepare_home();
 
@@ -121,8 +164,12 @@ fn main() {
             update_settings,
             list_alerts,
             list_destinations,
+            destination_detail,
+            list_domains,
+            set_domain_trust,
             list_flows,
             list_processes,
+            process_detail,
             list_connections
         ])
         .run(tauri::generate_context!())

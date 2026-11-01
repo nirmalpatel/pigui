@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::models::{
-    Alert, Connection, Destination, DnsObservation, Flow, HttpObservation, Process,
-    QuicObservation, SnortCapabilities, TlsObservation,
+    Alert, Connection, Destination, DnsObservation, DomainSummary, EndpointDomain, Flow,
+    HttpObservation, Process, QuicObservation, ReviewFlag, SnortCapabilities, TlsObservation,
+    TrustState,
 };
 
 pub const METHOD_STATUS: &str = "status";
@@ -13,6 +14,10 @@ pub const METHOD_DESTINATIONS_LIST: &str = "destinations.list";
 pub const METHOD_FLOWS_LIST: &str = "flows.list";
 pub const METHOD_PROCESSES_LIST: &str = "processes.list";
 pub const METHOD_CONNECTIONS_LIST: &str = "connections.list";
+pub const METHOD_DESTINATIONS_DETAIL: &str = "destinations.detail";
+pub const METHOD_PROCESSES_DETAIL: &str = "processes.detail";
+pub const METHOD_DOMAINS_LIST: &str = "domains.list";
+pub const METHOD_DOMAINS_SET_TRUST: &str = "domains.set_trust";
 pub const METHOD_DNS_LIST: &str = "dns.list";
 pub const METHOD_TLS_LIST: &str = "tls.list";
 pub const METHOD_HTTP_LIST: &str = "http.list";
@@ -120,6 +125,65 @@ pub struct ProcessList {
 pub struct ConnectionList {
     pub connections: Vec<Connection>,
     pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DestinationProcess {
+    pub pid: Option<u32>,
+    pub process_name: Option<String>,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub connection_count: u64,
+    pub last_seen: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DestinationDetail {
+    pub destination: Destination,
+    pub processes: Vec<DestinationProcess>,
+    pub recent_alerts: Vec<AlertRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessDestination {
+    pub ip: String,
+    pub domains: Vec<EndpointDomain>,
+    pub trust_state: TrustState,
+    pub flags: Vec<ReviewFlag>,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub connection_count: u64,
+    pub last_seen: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessDetail {
+    pub process: Process,
+    pub destinations: Vec<ProcessDestination>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainList {
+    pub domains: Vec<DomainSummary>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DestinationQuery {
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessQuery {
+    pub pid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetTrustRequest {
+    pub registrable_domain: String,
+    pub state: TrustState,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -3,12 +3,15 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pigui_collector::CollectorSnapshot;
+use pigui_core::domain::{normalize_hostname, registrable_domain};
 use pigui_core::error::{Error, Result};
 use pigui_core::models::{
-    Alert, Connection, Destination, DnsObservation, ExtractorRecord, Flow, HttpObservation,
-    Process, QuicObservation, TlsObservation,
+    Alert, Connection, Destination, DnsObservation, DomainSummary, EndpointDomain, ExtractorRecord,
+    Flow, HttpObservation, Process, QuicObservation, ReviewFlag, TlsObservation, TrustState,
 };
-use pigui_core::rpc::AlertRecord;
+use pigui_core::rpc::{
+    AlertRecord, DestinationDetail, DestinationProcess, ProcessDestination, ProcessDetail,
+};
 use rusqlite::{Connection as SqlConnection, OptionalExtension, params};
 use serde::Serialize;
 
@@ -162,6 +165,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tls_dedupe ON tls_observations (
     ts, IFNULL(server_ip, ''), IFNULL(server_port, 0), IFNULL(server_name, '')
 );
 CREATE INDEX IF NOT EXISTS idx_tls_ts ON tls_observations (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_tls_server_ip ON tls_observations (server_ip);
 
 CREATE TABLE IF NOT EXISTS http_observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,7 +202,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_quic_dedupe ON quic_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_quic_ts ON quic_observations (ts DESC);
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '2');
+CREATE TABLE IF NOT EXISTS domains (
+    domain TEXT PRIMARY KEY,
+    registrable_domain TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    observation_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_domains_registrable ON domains (registrable_domain);
+CREATE INDEX IF NOT EXISTS idx_domains_last_seen ON domains (last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS endpoint_domains (
+    ip TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    server_port INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    observation_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (ip, domain)
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoint_domains_domain ON endpoint_domains (domain);
+CREATE INDEX IF NOT EXISTS idx_endpoint_domains_last_seen ON endpoint_domains (last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS domain_trust (
+    registrable_domain TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    note TEXT,
+    updated_at INTEGER NOT NULL
+);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '3');
 "#;
 
 const INSERT_ALERT: &str = r#"
@@ -240,6 +276,43 @@ ON CONFLICT(ip) DO UPDATE SET
     bytes_in = bytes_in + excluded.bytes_in,
     bytes_out = bytes_out + excluded.bytes_out,
     connection_count = connection_count + 1
+"#;
+
+const UPSERT_ENDPOINT_IDENTITY: &str = r#"
+INSERT INTO endpoints (ip, first_seen, last_seen)
+VALUES (?1, ?2, ?2)
+ON CONFLICT(ip) DO UPDATE SET
+    first_seen = MIN(first_seen, excluded.first_seen),
+    last_seen = MAX(last_seen, excluded.last_seen)
+"#;
+
+const UPSERT_DOMAIN: &str = r#"
+INSERT INTO domains (domain, registrable_domain, first_seen, last_seen, observation_count)
+VALUES (?1, ?2, ?3, ?3, 1)
+ON CONFLICT(domain) DO UPDATE SET
+    registrable_domain = excluded.registrable_domain,
+    first_seen = MIN(first_seen, excluded.first_seen),
+    last_seen = MAX(last_seen, excluded.last_seen),
+    observation_count = observation_count + 1
+"#;
+
+const UPSERT_ENDPOINT_DOMAIN: &str = r#"
+INSERT INTO endpoint_domains (
+    ip, domain, server_port, source, first_seen, last_seen, observation_count
+) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1)
+ON CONFLICT(ip, domain) DO UPDATE SET
+    server_port = CASE
+        WHEN excluded.server_port > 0 THEN excluded.server_port
+        ELSE endpoint_domains.server_port END,
+    source = CASE
+        WHEN (CASE excluded.source
+            WHEN 'tls' THEN 4 WHEN 'quic' THEN 3 WHEN 'http' THEN 2 WHEN 'dns' THEN 1 ELSE 0 END)
+        >= (CASE endpoint_domains.source
+            WHEN 'tls' THEN 4 WHEN 'quic' THEN 3 WHEN 'http' THEN 2 WHEN 'dns' THEN 1 ELSE 0 END)
+        THEN excluded.source ELSE endpoint_domains.source END,
+    first_seen = MIN(first_seen, excluded.first_seen),
+    last_seen = MAX(last_seen, excluded.last_seen),
+    observation_count = observation_count + 1
 "#;
 
 const UPSERT_PROCESS: &str = r#"
@@ -293,6 +366,28 @@ ORDER BY e.alert_count DESC, e.last_seen DESC, e.ip ASC
 LIMIT ?1 OFFSET ?2
 "#;
 
+const SELECT_DESTINATION_BY_IP: &str = r#"
+SELECT
+    e.ip, e.hostname, e.first_seen, e.last_seen, e.bytes_in, e.bytes_out,
+    e.connection_count,
+    (SELECT COUNT(DISTINCT f.pid) FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL),
+    e.alert_count, e.reputation, e.blocked
+FROM endpoints e
+WHERE e.ip = ?1
+LIMIT 1
+"#;
+
+const SELECT_ALERT_BY_DST: &str = r#"
+SELECT
+    id, event_ts, ts_text, gid, sid, rev, priority, class, msg, proto,
+    src_ip, src_port, dst_ip, dst_port, action, app_id, service, rule,
+    direction, pkt_num, ingested_at
+FROM alerts
+WHERE dst_ip = ?1
+ORDER BY event_ts DESC, id DESC
+LIMIT 10
+"#;
+
 const SELECT_FLOW: &str = r#"
 SELECT
     id, proto, client_ip, client_port, server_ip, server_port, pid, process_name,
@@ -308,6 +403,14 @@ SELECT
 FROM processes
 ORDER BY last_seen DESC, bytes_in + bytes_out DESC
 LIMIT ?1 OFFSET ?2
+"#;
+
+const SELECT_PROCESS_BY_PID: &str = r#"
+SELECT
+    pid, name, path, user, first_seen, last_seen, bytes_in, bytes_out, connection_count
+FROM processes
+WHERE pid = ?1
+LIMIT 1
 "#;
 
 const SELECT_CONNECTION: &str = r#"
@@ -359,8 +462,12 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")
             .map_err(db)?;
         conn.pragma_update(None, "foreign_keys", "ON").map_err(db)?;
+        let previous_version = read_schema_version(&conn)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         ensure_endpoints_hostname(&conn)?;
+        if previous_version.as_deref() != Some("3") {
+            backfill_domains(&conn)?;
+        }
         Ok(Self { conn })
     }
 
@@ -438,6 +545,8 @@ impl Store {
         }
 
         for socket in &snapshot.sockets {
+            tx.execute(UPSERT_ENDPOINT_IDENTITY, params![socket.server_ip, now])
+                .map_err(db)?;
             tx.execute(
                 UPSERT_FLOW,
                 params![
@@ -539,28 +648,342 @@ impl Store {
     pub fn list_destinations(&self, limit: u32, offset: u32) -> Result<Vec<Destination>> {
         let mut statement = self.conn.prepare(SELECT_DESTINATION).map_err(db)?;
         let rows = statement
-            .query_map(params![limit, offset], |row| {
-                Ok(Destination {
-                    ip: row.get(0)?,
-                    hostname: row.get(1)?,
-                    first_seen: row.get(2)?,
-                    last_seen: row.get(3)?,
-                    bytes_in: row.get::<_, i64>(4)? as u64,
-                    bytes_out: row.get::<_, i64>(5)? as u64,
-                    connection_count: row.get::<_, i64>(6)? as u64,
-                    process_count: row.get::<_, i64>(7)? as u64,
-                    alert_count: row.get::<_, i64>(8)? as u64,
-                    reputation: row.get(9)?,
-                    blocked: row.get::<_, i64>(10)? != 0,
-                })
-            })
+            .query_map(params![limit, offset], destination_from_row)
             .map_err(db)?;
+        let mut destinations = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?;
+        drop(statement);
 
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+        for destination in &mut destinations {
+            self.hydrate_destination(destination, true)?;
+        }
+        Ok(destinations)
     }
 
     pub fn count_destinations(&self) -> Result<u64> {
         self.count("SELECT COUNT(*) FROM endpoints")
+    }
+
+    pub fn endpoint_domains(&self, ip: &str) -> Result<Vec<EndpointDomain>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT ed.domain, d.registrable_domain, ed.source, ed.server_port,
+                        COALESCE(t.state, 'unknown'), ed.first_seen, ed.last_seen
+                 FROM endpoint_domains ed
+                 JOIN domains d ON d.domain = ed.domain
+                 LEFT JOIN domain_trust t ON t.registrable_domain = d.registrable_domain
+                 WHERE ed.ip = ?1
+                 ORDER BY ed.last_seen DESC, ed.domain ASC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![ip], |row| {
+                let port: i64 = row.get(3)?;
+                let trust: String = row.get(4)?;
+                Ok(EndpointDomain {
+                    domain: row.get(0)?,
+                    registrable_domain: row.get(1)?,
+                    source: row.get(2)?,
+                    server_port: (port > 0).then_some(port as u16),
+                    trust_state: TrustState::parse(&trust).unwrap_or_default(),
+                    first_seen: row.get(5)?,
+                    last_seen: row.get(6)?,
+                })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn list_domains(&self, limit: u32, offset: u32) -> Result<Vec<DomainSummary>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT d.registrable_domain,
+                        COALESCE(t.state, 'unknown'),
+                        MIN(d.first_seen),
+                        MAX(d.last_seen),
+                        SUM(d.observation_count),
+                        GROUP_CONCAT(d.domain, char(31)),
+                        (SELECT COUNT(DISTINCT ed.ip)
+                         FROM endpoint_domains ed
+                         JOIN domains dd ON dd.domain = ed.domain
+                         WHERE dd.registrable_domain = d.registrable_domain),
+                        (SELECT COUNT(*) FROM (
+                            SELECT f.pid
+                            FROM flows f
+                            JOIN endpoint_domains ed ON ed.ip = f.server_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                              AND f.pid IS NOT NULL
+                            UNION
+                            SELECT c.pid
+                            FROM connections c
+                            JOIN endpoint_domains ed ON ed.ip = c.server_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                              AND c.pid IS NOT NULL
+                        )),
+                        (SELECT EXISTS(
+                            SELECT 1
+                            FROM alerts a
+                            JOIN endpoint_domains ed ON ed.ip = a.dst_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                        )),
+                        (SELECT EXISTS(
+                            SELECT 1
+                            FROM tls_observations t
+                            JOIN endpoint_domains ed ON ed.ip = t.server_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                              AND lower(COALESCE(t.validation_status, '')) IN
+                                  ('invalid', 'self_signed', 'self signed', 'untrusted')
+                        ))
+                 FROM domains d
+                 LEFT JOIN domain_trust t ON t.registrable_domain = d.registrable_domain
+                 GROUP BY d.registrable_domain
+                 ORDER BY MAX(d.last_seen) DESC
+                 LIMIT ?1 OFFSET ?2",
+            )
+            .map_err(db)?;
+        let now = unix_now();
+        let rows = statement
+            .query_map(params![limit, offset], |row| {
+                let trust: String = row.get(1)?;
+                let trust_state = TrustState::parse(&trust).unwrap_or_default();
+                let first_seen: i64 = row.get(2)?;
+                let hostnames: Option<String> = row.get(5)?;
+                let mut flags = Vec::new();
+                if trust_state == TrustState::Unknown {
+                    flags.push(ReviewFlag::UnknownTrust);
+                }
+                if now.saturating_sub(first_seen) <= 86_400 {
+                    flags.push(ReviewFlag::NewDomain);
+                }
+                if row.get::<_, i64>(8)? != 0 {
+                    flags.push(ReviewFlag::Alerts);
+                }
+                if row.get::<_, i64>(9)? != 0 {
+                    flags.push(ReviewFlag::InvalidTls);
+                }
+                Ok(DomainSummary {
+                    domain: row.get(0)?,
+                    hostnames: hostnames
+                        .unwrap_or_default()
+                        .split('\u{1f}')
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                    trust_state,
+                    first_seen,
+                    last_seen: row.get(3)?,
+                    observation_count: row.get::<_, i64>(4)? as u64,
+                    endpoint_count: row.get::<_, i64>(6)? as u64,
+                    process_count: row.get::<_, i64>(7)? as u64,
+                    flags,
+                })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn count_domains(&self) -> Result<u64> {
+        self.count("SELECT COUNT(DISTINCT registrable_domain) FROM domains")
+    }
+
+    pub fn set_domain_trust(
+        &self,
+        domain: &str,
+        state: TrustState,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let hostname = normalize_hostname(domain)
+            .unwrap_or_else(|| domain.trim().trim_end_matches('.').to_ascii_lowercase());
+        let registrable = registrable_domain(&hostname);
+        if state == TrustState::Unknown {
+            self.conn
+                .execute(
+                    "DELETE FROM domain_trust WHERE registrable_domain = ?1",
+                    params![registrable],
+                )
+                .map_err(db)?;
+            return Ok(());
+        }
+        self.conn
+            .execute(
+                "INSERT INTO domain_trust (registrable_domain, state, note, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(registrable_domain) DO UPDATE SET
+                     state = excluded.state,
+                     note = excluded.note,
+                     updated_at = excluded.updated_at",
+                params![registrable, state.as_str(), note, unix_now()],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    pub fn destination_detail(&self, ip: &str) -> Result<Option<DestinationDetail>> {
+        let mut statement = self.conn.prepare(SELECT_DESTINATION_BY_IP).map_err(db)?;
+        let destination = statement
+            .query_row(params![ip], destination_from_row)
+            .optional()
+            .map_err(db)?;
+        drop(statement);
+        let Some(mut destination) = destination else {
+            return Ok(None);
+        };
+        self.hydrate_destination(&mut destination, true)?;
+        let processes = self.destination_processes(ip)?;
+        let recent_alerts = self.alerts_for_destination(ip)?;
+        Ok(Some(DestinationDetail {
+            destination,
+            processes,
+            recent_alerts,
+        }))
+    }
+
+    pub fn process_detail(&self, pid: u32) -> Result<Option<ProcessDetail>> {
+        let mut statement = self.conn.prepare(SELECT_PROCESS_BY_PID).map_err(db)?;
+        let process = statement
+            .query_row(params![i64::from(pid)], process_from_row)
+            .optional()
+            .map_err(db)?;
+        drop(statement);
+        let Some(process) = process else {
+            return Ok(None);
+        };
+        Ok(Some(ProcessDetail {
+            process,
+            destinations: self.process_destinations(pid)?,
+        }))
+    }
+
+    fn hydrate_destination(&self, destination: &mut Destination, check_tls: bool) -> Result<()> {
+        let domains = self.endpoint_domains(&destination.ip)?;
+        let invalid_tls = if check_tls {
+            self.has_invalid_tls(&destination.ip)?
+        } else {
+            false
+        };
+        if destination.hostname.is_none() {
+            destination.hostname = domains.first().map(|domain| domain.domain.clone());
+        }
+        destination.trust_state = aggregate_trust(&domains);
+        destination.flags =
+            review_flags(&domains, destination.alert_count, invalid_tls, unix_now());
+        destination.domains = domains;
+        Ok(())
+    }
+
+    fn has_invalid_tls(&self, ip: &str) -> Result<bool> {
+        let invalid: i64 = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM tls_observations
+                    WHERE server_ip = ?1
+                      AND lower(COALESCE(validation_status, '')) IN
+                          ('invalid', 'self_signed', 'self signed', 'untrusted')
+                )",
+                params![ip],
+                |row| row.get(0),
+            )
+            .map_err(db)?;
+        Ok(invalid != 0)
+    }
+
+    fn destination_processes(&self, ip: &str) -> Result<Vec<DestinationProcess>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT pid, process_name, SUM(bytes_ba), SUM(bytes_ab), COUNT(*), MAX(last_seen)
+                 FROM (
+                     SELECT pid, process_name, bytes_ab, bytes_ba, last_seen
+                     FROM flows WHERE server_ip = ?1
+                     UNION ALL
+                     SELECT pid, process_name, bytes_ab, bytes_ba, ts AS last_seen
+                     FROM connections WHERE server_ip = ?1
+                 )
+                 GROUP BY pid, process_name
+                 ORDER BY SUM(bytes_ba) + SUM(bytes_ab) DESC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![ip], |row| {
+                Ok(DestinationProcess {
+                    pid: row.get::<_, Option<i64>>(0)?.map(|value| value as u32),
+                    process_name: row.get(1)?,
+                    bytes_in: row.get::<_, i64>(2)? as u64,
+                    bytes_out: row.get::<_, i64>(3)? as u64,
+                    connection_count: row.get::<_, i64>(4)? as u64,
+                    last_seen: row.get(5)?,
+                })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    fn alerts_for_destination(&self, ip: &str) -> Result<Vec<AlertRecord>> {
+        let mut statement = self.conn.prepare(SELECT_ALERT_BY_DST).map_err(db)?;
+        let rows = statement
+            .query_map(params![ip], alert_record_from_row)
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    fn process_destinations(&self, pid: u32) -> Result<Vec<ProcessDestination>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT server_ip, SUM(bytes_ba), SUM(bytes_ab), COUNT(*), MAX(last_seen)
+                 FROM (
+                     SELECT server_ip, bytes_ab, bytes_ba, last_seen
+                     FROM flows WHERE pid = ?1
+                     UNION ALL
+                     SELECT server_ip, bytes_ab, bytes_ba, ts AS last_seen
+                     FROM connections WHERE pid = ?1
+                 )
+                 WHERE server_ip IS NOT NULL
+                 GROUP BY server_ip
+                 ORDER BY SUM(bytes_ba) + SUM(bytes_ab) DESC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![i64::from(pid)], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, i64>(3)? as u64,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(db)?;
+        let entries = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?;
+        drop(statement);
+
+        let now = unix_now();
+        let mut destinations = Vec::with_capacity(entries.len());
+        for (ip, bytes_in, bytes_out, connection_count, last_seen) in entries {
+            let domains = self.endpoint_domains(&ip)?;
+            let invalid_tls = self.has_invalid_tls(&ip)?;
+            destinations.push(ProcessDestination {
+                trust_state: aggregate_trust(&domains),
+                flags: review_flags(&domains, 0, invalid_tls, now),
+                domains,
+                ip,
+                bytes_in,
+                bytes_out,
+                connection_count,
+                last_seen,
+            });
+        }
+        Ok(destinations)
     }
 
     pub fn list_flows(&self, limit: u32, offset: u32) -> Result<Vec<Flow>> {
@@ -911,6 +1334,7 @@ fn insert_dns(
         for answer in answers.split_whitespace() {
             if answer.parse::<IpAddr>().is_ok() {
                 upsert_hostname(tx, answer, query, now)?;
+                record_domain_mapping(tx, answer, query, None, "dns", event.common.ts)?;
             }
         }
     }
@@ -946,6 +1370,14 @@ fn insert_tls(
         && let (Some(ip), Some(hostname)) = (&event.common.server_ip, &event.server_name)
     {
         upsert_hostname(tx, ip, hostname, now)?;
+        record_domain_mapping(
+            tx,
+            ip,
+            hostname,
+            event.common.server_port,
+            "tls",
+            event.common.ts,
+        )?;
     }
     Ok(inserted == 1)
 }
@@ -978,6 +1410,14 @@ fn insert_http(
         && let (Some(ip), Some(hostname)) = (&event.common.server_ip, &event.host)
     {
         upsert_hostname(tx, ip, hostname, now)?;
+        record_domain_mapping(
+            tx,
+            ip,
+            hostname,
+            event.common.server_port,
+            "http",
+            event.common.ts,
+        )?;
     }
     Ok(inserted == 1)
 }
@@ -1007,6 +1447,14 @@ fn insert_quic(
         && let (Some(ip), Some(hostname)) = (&event.common.server_ip, &event.server_name)
     {
         upsert_hostname(tx, ip, hostname, now)?;
+        record_domain_mapping(
+            tx,
+            ip,
+            hostname,
+            event.common.server_port,
+            "quic",
+            event.common.ts,
+        )?;
     }
     Ok(inserted == 1)
 }
@@ -1022,11 +1470,324 @@ fn upsert_hostname(
     Ok(())
 }
 
+fn record_domain_mapping(
+    conn: &SqlConnection,
+    ip: &str,
+    hostname: &str,
+    server_port: Option<u16>,
+    source: &str,
+    ts: i64,
+) -> Result<()> {
+    let Some(domain) = normalize_hostname(hostname) else {
+        return Ok(());
+    };
+    let registrable = registrable_domain(&domain);
+    conn.execute(UPSERT_DOMAIN, params![domain, registrable, ts])
+        .map_err(db)?;
+    conn.execute(
+        UPSERT_ENDPOINT_DOMAIN,
+        params![
+            ip,
+            domain,
+            server_port.map(i64::from).unwrap_or(0),
+            source,
+            ts
+        ],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+fn read_schema_version(conn: &SqlConnection) -> Result<Option<String>> {
+    let table: Option<String> = conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    if table.is_none() {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT value FROM schema_meta WHERE key = 'version'",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(db)
+}
+
+fn backfill_domains(conn: &SqlConnection) -> Result<()> {
+    let tx = conn.unchecked_transaction().map_err(db)?;
+
+    let endpoint_rows = {
+        let mut statement = tx
+            .prepare("SELECT ip, hostname, last_seen FROM endpoints WHERE hostname IS NOT NULL")
+            .map_err(db)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(db)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?
+    };
+    for (ip, hostname, ts) in endpoint_rows {
+        record_domain_mapping(&tx, &ip, &hostname, None, "legacy", ts)?;
+    }
+
+    let dns_rows = {
+        let mut statement = tx
+            .prepare(
+                "SELECT query, answers, ts FROM dns_observations
+                 WHERE query IS NOT NULL AND answers IS NOT NULL",
+            )
+            .map_err(db)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(db)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?
+    };
+    for (query, answers, ts) in dns_rows {
+        for answer in answers.split_whitespace() {
+            if answer.parse::<IpAddr>().is_ok() {
+                record_domain_mapping(&tx, answer, &query, None, "dns", ts)?;
+            }
+        }
+    }
+
+    let tls_rows = {
+        let mut statement = tx
+            .prepare(
+                "SELECT server_ip, server_name, server_port, ts FROM tls_observations
+                 WHERE server_ip IS NOT NULL AND server_name IS NOT NULL",
+            )
+            .map_err(db)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(db)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?
+    };
+    for (ip, hostname, port, ts) in tls_rows {
+        record_domain_mapping(
+            &tx,
+            &ip,
+            &hostname,
+            port.and_then(|value| u16::try_from(value).ok()),
+            "tls",
+            ts,
+        )?;
+    }
+
+    let http_rows = {
+        let mut statement = tx
+            .prepare(
+                "SELECT server_ip, host, server_port, ts FROM http_observations
+                 WHERE server_ip IS NOT NULL AND host IS NOT NULL",
+            )
+            .map_err(db)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(db)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?
+    };
+    for (ip, hostname, port, ts) in http_rows {
+        record_domain_mapping(
+            &tx,
+            &ip,
+            &hostname,
+            port.and_then(|value| u16::try_from(value).ok()),
+            "http",
+            ts,
+        )?;
+    }
+
+    let quic_rows = {
+        let mut statement = tx
+            .prepare(
+                "SELECT server_ip, server_name, server_port, ts FROM quic_observations
+                 WHERE server_ip IS NOT NULL AND server_name IS NOT NULL",
+            )
+            .map_err(db)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(db)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db)?
+    };
+    for (ip, hostname, port, ts) in quic_rows {
+        record_domain_mapping(
+            &tx,
+            &ip,
+            &hostname,
+            port.and_then(|value| u16::try_from(value).ok()),
+            "quic",
+            ts,
+        )?;
+    }
+
+    tx.commit().map_err(db)?;
+    Ok(())
+}
+
 pub fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn destination_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Destination> {
+    Ok(Destination {
+        ip: row.get(0)?,
+        hostname: row.get(1)?,
+        first_seen: row.get(2)?,
+        last_seen: row.get(3)?,
+        bytes_in: row.get::<_, i64>(4)? as u64,
+        bytes_out: row.get::<_, i64>(5)? as u64,
+        connection_count: row.get::<_, i64>(6)? as u64,
+        process_count: row.get::<_, i64>(7)? as u64,
+        alert_count: row.get::<_, i64>(8)? as u64,
+        reputation: row.get(9)?,
+        blocked: row.get::<_, i64>(10)? != 0,
+        domains: Vec::new(),
+        trust_state: TrustState::Unknown,
+        flags: Vec::new(),
+    })
+}
+
+fn alert_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRecord> {
+    Ok(AlertRecord {
+        id: row.get(0)?,
+        alert: Alert {
+            event_ts: row.get(1)?,
+            ts_text: row.get(2)?,
+            gid: row.get(3)?,
+            sid: row.get(4)?,
+            rev: row.get(5)?,
+            priority: row.get(6)?,
+            class: row.get(7)?,
+            msg: row.get(8)?,
+            proto: row.get(9)?,
+            src_ip: row.get(10)?,
+            src_port: row.get(11)?,
+            dst_ip: row.get(12)?,
+            dst_port: row.get(13)?,
+            action: row.get(14)?,
+            app_id: row.get(15)?,
+            service: row.get(16)?,
+            rule: row.get(17)?,
+            direction: row.get(18)?,
+            pkt_num: row.get::<_, Option<i64>>(19)?.map(|value| value as u64),
+        },
+        ingested_at: row.get(20)?,
+    })
+}
+
+fn process_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Process> {
+    Ok(Process {
+        pid: row.get::<_, i64>(0)? as u32,
+        name: row.get(1)?,
+        path: row.get(2)?,
+        user: row.get(3)?,
+        first_seen: row.get(4)?,
+        last_seen: row.get(5)?,
+        bytes_in: row.get::<_, i64>(6)? as u64,
+        bytes_out: row.get::<_, i64>(7)? as u64,
+        connection_count: row.get::<_, i64>(8)? as u64,
+    })
+}
+
+fn aggregate_trust(domains: &[EndpointDomain]) -> TrustState {
+    if domains.is_empty() {
+        return TrustState::Unknown;
+    }
+    if domains
+        .iter()
+        .any(|domain| domain.trust_state == TrustState::Suspicious)
+    {
+        return TrustState::Suspicious;
+    }
+    if domains
+        .iter()
+        .all(|domain| domain.trust_state == TrustState::Trusted)
+    {
+        return TrustState::Trusted;
+    }
+    if domains
+        .iter()
+        .all(|domain| domain.trust_state == TrustState::Ignored)
+    {
+        return TrustState::Ignored;
+    }
+    TrustState::Unknown
+}
+
+fn review_flags(
+    domains: &[EndpointDomain],
+    alert_count: u64,
+    invalid_tls: bool,
+    now: i64,
+) -> Vec<ReviewFlag> {
+    let mut flags = Vec::new();
+    if domains.is_empty() {
+        flags.push(ReviewFlag::NoDomain);
+    }
+    if domains
+        .iter()
+        .any(|domain| domain.trust_state == TrustState::Unknown)
+    {
+        flags.push(ReviewFlag::UnknownTrust);
+    }
+    if domains
+        .iter()
+        .any(|domain| now.saturating_sub(domain.first_seen) <= 86_400)
+    {
+        flags.push(ReviewFlag::NewDomain);
+    }
+    if invalid_tls {
+        flags.push(ReviewFlag::InvalidTls);
+    }
+    if alert_count > 0 {
+        flags.push(ReviewFlag::Alerts);
+    }
+    flags
 }
 
 fn db(error: rusqlite::Error) -> Error {
@@ -1202,5 +1963,144 @@ mod tests {
             .find(|destination| destination.ip == "93.184.216.34")
             .unwrap();
         assert_eq!(example.hostname.as_deref(), Some("example.com"));
+        assert_eq!(store.endpoint_domains("93.184.216.34").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn maps_multiple_domains_to_one_endpoint_and_tracks_trust() {
+        let mut store = Store::open_in_memory().unwrap();
+        let records = vec![
+            extractor(
+                r#"{"ts":1000,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"example.com","version":"TLSv1.3","validation_status":"valid"}"#,
+            ),
+            extractor(
+                r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"api.spotify.com","version":"TLSv1.3","validation_status":"valid"}"#,
+            ),
+            extractor(
+                r#"{"ts":1002,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"proto":"tcp","service":"ssl","conn_state":"SF","orig_bytes":100,"resp_bytes":200}"#,
+            ),
+        ];
+        store.insert_extractor_records(&records, 1002).unwrap();
+
+        let domains = store.endpoint_domains("93.184.216.34").unwrap();
+        assert_eq!(domains.len(), 2);
+        assert!(domains.iter().any(|domain| domain.domain == "example.com"));
+        assert!(
+            domains
+                .iter()
+                .any(|domain| domain.domain == "api.spotify.com")
+        );
+
+        let summaries = store.list_domains(10, 0).unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert!(
+            summaries
+                .iter()
+                .any(|summary| summary.domain == "spotify.com")
+        );
+
+        store
+            .set_domain_trust("spotify.com", TrustState::Trusted, Some("music"))
+            .unwrap();
+        let domains = store.endpoint_domains("93.184.216.34").unwrap();
+        let spotify = domains
+            .iter()
+            .find(|domain| domain.domain == "api.spotify.com")
+            .unwrap();
+        assert_eq!(spotify.trust_state, TrustState::Trusted);
+
+        let destination = store
+            .list_destinations(10, 0)
+            .unwrap()
+            .into_iter()
+            .find(|destination| destination.ip == "93.184.216.34")
+            .unwrap();
+        assert_eq!(destination.domains.len(), 2);
+        assert_eq!(destination.trust_state, TrustState::Unknown);
+        assert!(destination.flags.contains(&ReviewFlag::UnknownTrust));
+    }
+
+    #[test]
+    fn flags_invalid_tls_and_alerts() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .insert_alerts(&[alert(10, 1, "198.51.100.10", 443)])
+            .unwrap();
+        store
+            .insert_extractor_records(
+                &[extractor(
+                    r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"odd.example.com","version":"TLSv1.2","validation_status":"invalid"}"#,
+                )],
+                1001,
+            )
+            .unwrap();
+
+        let destination = store
+            .list_destinations(10, 0)
+            .unwrap()
+            .into_iter()
+            .find(|destination| destination.ip == "198.51.100.10")
+            .unwrap();
+        assert!(destination.flags.contains(&ReviewFlag::Alerts));
+        assert!(destination.flags.contains(&ReviewFlag::InvalidTls));
+        assert!(destination.flags.contains(&ReviewFlag::UnknownTrust));
+
+        let domain = store
+            .list_domains(10, 0)
+            .unwrap()
+            .into_iter()
+            .find(|domain| domain.domain == "example.com")
+            .unwrap();
+        assert!(domain.flags.contains(&ReviewFlag::Alerts));
+        assert!(domain.flags.contains(&ReviewFlag::InvalidTls));
+    }
+
+    #[test]
+    fn links_processes_and_destinations_with_domains() {
+        let mut store = Store::open_in_memory().unwrap();
+        let snapshot = CollectorSnapshot {
+            processes: vec![ProcessSample {
+                pid: 42,
+                name: "Spotify".into(),
+                path: Some("/Applications/Spotify.app".into()),
+                user: Some("nirmal".into()),
+                bytes_in: 100,
+                bytes_out: 200,
+                connection_count: 1,
+            }],
+            sockets: vec![SocketSample {
+                proto: "tcp".into(),
+                client_ip: "10.0.0.5".into(),
+                client_port: 50000,
+                server_ip: "198.51.100.10".into(),
+                server_port: 443,
+                state: Some("Established".into()),
+                interface: Some("en0".into()),
+                bytes_ab: 100,
+                bytes_ba: 200,
+                pid: 42,
+                process_name: "Spotify".into(),
+            }],
+        };
+        store.apply_snapshot(&snapshot, 1000).unwrap();
+        store
+            .insert_extractor_records(
+                &[extractor(
+                    r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"api.spotify.com","version":"TLSv1.3","validation_status":"valid"}"#,
+                )],
+                1001,
+            )
+            .unwrap();
+
+        let process = store.process_detail(42).unwrap().unwrap();
+        assert_eq!(process.destinations.len(), 1);
+        assert_eq!(process.destinations[0].ip, "198.51.100.10");
+        assert_eq!(process.destinations[0].domains.len(), 1);
+        assert_eq!(process.destinations[0].domains[0].domain, "api.spotify.com");
+
+        let destination = store.destination_detail("198.51.100.10").unwrap().unwrap();
+        assert_eq!(destination.processes.len(), 1);
+        assert_eq!(destination.processes[0].pid, Some(42));
+        assert_eq!(destination.destination.domains.len(), 1);
     }
 }
