@@ -1,0 +1,143 @@
+# pigui-daemon
+
+`pigui-daemon` is the unprivileged manager process. It owns ingestion,
+normalization, SQLite storage, background collection, and the local RPC API.
+
+## Privilege model
+
+The daemon does **not** run as root. It does not need root for its current
+duties:
+
+- Snort is launched with `sudo` by `scripts/snort-live.sh` so it can open BPF.
+  The script asks Snort to drop to the current user with `-u`/`-g` after
+  capture starts, with a root retry if that fails.
+- The daemon reads Snort output files and polls `nettop` as the current user.
+- The future `pigui-helper` will be the root-owned component for firewall and
+  privileged service actions.
+
+Do not install or launch the daemon as a root LaunchDaemon without revisiting
+this model. Running the daemon unprivileged keeps the highest-risk ingestion and
+RPC surface out of the root domain.
+
+## Startup
+
+```bash
+./target/debug/pigui-daemon [OPTIONS]
+```
+
+| Flag | Purpose |
+|---|---|
+| `--alerts-file <PATH>` | Alert JSONL file to tail; defaults to `PIGUI_ALERT_JSON` |
+| `--from-end` | Start at the current end of the alert file instead of replaying it |
+| `--once` | Ingest the alert file once and exit |
+| `--db <PATH>` | Override the SQLite database path |
+| `--socket <PATH>` | Override the daemon socket path |
+
+Configuration comes from `Config::load()`: `PIGUI_HOME`, `.env`, and
+environment variables. See [08-development.md](08-development.md#environment-reference)
+for the full list.
+
+On startup the daemon:
+
+1. Initializes tracing (`RUST_LOG`, default `info`).
+2. Loads configuration and creates runtime directories.
+3. Opens SQLite, applies the schema, runs the WAL and synchronous pragmas, and
+   migrates/backfills domain data when needed.
+4. Probes Snort and logs capability warnings.
+5. Starts the alert tailer, the extractor tailer, the process collector
+   thread, the name resolver thread, and the RPC server.
+6. Waits for Ctrl-C, SIGTERM, or an RPC `shutdown` request.
+7. Requests shutdown, stops the API, and removes the socket.
+
+`--once` skips the API and background tasks.
+
+## Background tasks
+
+| Task | Interval | Behavior |
+|---|---|---|
+| Alert tailer | 500 ms | Polls the alert file, parses `alert_json`, inserts alerts |
+| Extractor tailer | 500 ms | Polls the extractor JSONL file, classifies and inserts records |
+| Process collector | `PIGUI_PROCESS_POLL_MS` (default 1000 ms, minimum 250 ms) | Runs `nettop`, enriches with `ps`, upserts processes and live flows |
+| Name resolver | ~30 s loop | Resolves PTR candidates and due watched domains |
+| RPC server | event-driven | Accepts newline-delimited JSON requests on the Unix socket |
+
+The collectors run on dedicated OS threads so the single-threaded async runtime
+is not blocked by `nettop`, `ps`, or DNS.
+
+Both tailers start at the beginning of their files by default. The daemon relies
+on SQLite dedupe indexes, so replaying does not duplicate rows. Use `--from-end`
+for alerts when replay is unwanted.
+
+Path handling:
+
+- The alert file comes from `--alerts-file`, `PIGUI_ALERT_JSON`, or the live
+  log directory.
+- The extractor file comes from `PIGUI_EXTRACTOR_JSON`.
+- Relative paths are resolved against `PIGUI_HOME`.
+
+## Storage
+
+Default databases:
+
+- `var/lib/pigui.db` — fixture/default mode.
+- `var/lib/pigui-live.db` — live mode.
+- `var/lib/pigui-gui.db` — GUI preferences, owned by the GUI process, not the
+  daemon.
+
+The daemon sets `journal_mode = WAL`, `synchronous = NORMAL`, and
+`foreign_keys = ON`. See [03-data.md](03-data.md) for schema and retention
+details.
+
+## RPC API
+
+Unix domain socket, default `var/run/pigui-daemon.sock`.
+
+- The parent directory is created with mode `0700`.
+- The socket is set to mode `0600`.
+- There is no TCP listener by default.
+- Requests and responses are single-line JSON objects.
+- Unknown methods return an RPC error.
+- `shutdown` triggers a clean stop and socket removal.
+
+The full method list, payloads, and CLI/GUI mapping are in
+[06-rpc-api.md](06-rpc-api.md).
+
+## Status and degraded modes
+
+The `status` response reports:
+
+- Snort capabilities, binary, version, and source.
+- Daemon mode, uptime, database, alert file, and socket path.
+- Counts for alerts, destinations, flows, processes, DNS, TLS, HTTP, QUIC, and
+  domains.
+- Snort process status from the PID file.
+- Extractor file size, modification time, last ingest time, and an idle flag.
+- Collector errors.
+- Degraded reasons.
+
+Degraded reasons are derived from Snort capabilities:
+
+- No control socket → signal/file mode.
+- No extractor → connection/domain telemetry disabled.
+- No `alert_json` → alert ingestion disabled.
+- Failed config validation.
+
+The extractor is reported idle in live mode when alerts have arrived, the
+extractor has ingested nothing, and the daemon has been up for more than 30
+seconds. This usually means `default_filter` is missing or the extractor file
+is not growing.
+
+## Logging
+
+Tracing output goes to stdout with ANSI disabled when not a terminal. Set
+`RUST_LOG` to change verbosity. The dev scripts redirect the daemon to
+`var/log/live-daemon.log`.
+
+## Current gaps
+
+- No control-socket client; Snort is managed by process/PID file.
+- No signal-based reload or stats dump.
+- No policy engine or rule bundle manager.
+- No helper RPC.
+- No retention or log rotation job.
+- No launchd service packaging.

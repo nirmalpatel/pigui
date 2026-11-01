@@ -7,7 +7,7 @@ Activity Monitor-style GUI.
 
 - Status: early implementation; Phase 1 and Phase 2 are complete
 - Project directory: `pigui/`
-- Full design and architecture: `pigui/README.md`
+- Full design and architecture: `pigui/docs/README.md`
 - Phase 1 runs the daemon against an `alert_json` fixture and serves a minimal
   Tauri alerts/destinations window under `pigui/`
 - Phase 2 adds live Snort capture, extractor ingestion, nettop-based process

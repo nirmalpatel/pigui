@@ -1,0 +1,104 @@
+# Roadmap and status
+
+PIGUI is at an early implementation stage. This page separates what exists from
+what is planned.
+
+## Milestones
+
+| Milestone | Deliverable | Status |
+|---|---|---|
+| M0 | Branch, docs, architecture, repository guardrails | Complete |
+| M1 | Rust workspace and Tauri scaffold | Complete |
+| M2 | Core models, config, SQLite schema, fixture parsers | Partial: alerts, extractor, domains, and schema complete |
+| M3 | Snort discovery, config generation, control adapter, log ingestion | Partial: discovery, config generation, alert/extractor ingestion complete; control adapter missing |
+| M4 | macOS process/socket collector and correlation | Partial: `nettop` collector and 5-tuple joins complete; Network Extension later |
+| M5 | Rule bundle manager and validation pipeline | Planned |
+| M6 | PF helper in dry-run mode | Planned |
+| M7 | Daemon API and GUI MVP | Partial: live processes/connections/destinations/alerts/domains/DNS API and tabs complete |
+| M8 | launchd packaging and macOS system integration | Planned |
+| M9 | Hardening, retention, audit, tests, documentation | Partial: tests and docs exist; retention, audit, and hardening pending |
+| M10 | Linux/ufw/nftables and Windows research | Later |
+
+## Implemented
+
+- Rust workspace with core, Snort adapter, collector, firewall types, daemon,
+  helper stub, CLI, and Tauri GUI.
+- Snort discovery and capability probe.
+- Generated live Snort configuration with validation.
+- Alert JSONL ingestion with dedupe.
+- Extractor ingestion for `conn`, `dns`, `ssl`, `http`, and `quic`.
+- `nettop` and `ps` process/socket collection.
+- Live flows, completed connections, processes, destinations, domains, DNS,
+  TLS, HTTP, and QUIC storage.
+- Domain normalization, registrable-domain trust, review flags, PTR lookups,
+  and watched domains.
+- Unix-socket daemon API.
+- CLI for headless inspection and diagnostics.
+- Tauri 2 + Svelte GUI shell.
+
+## Partial or missing
+
+- Snort control socket: Snort can be built with it, but PIGUI has no client and
+  live scripts do not wire it.
+- Signal-based Snort management.
+- Firewall: types and a dry-run backend exist; PF is a placeholder.
+- Helper: stub only.
+- Rule bundles and policy engine.
+- Retention and log rotation.
+- Audit log, sensor stats, and firewall action history.
+- launchd packaging and production paths.
+- Linux and Windows adapters.
+- Windows-compatible IPC and file/process APIs.
+
+## Platform support
+
+| Platform | Snort mode | Enforcement | Process attribution | Status |
+|---|---|---|---|---|
+| macOS 14+ | Passive pcap/BPF | PF (planned) | `nettop`/`ps` | First target |
+| Linux | Passive first, inline optional | ufw/nftables (planned) | `ss`/`/proc`/eBPF (planned) | Later |
+| Windows | Native support uncertain | Defender Firewall/WFP (planned) | `GetExtendedTcpTable`/ETW (planned) | Research |
+
+macOS is the only supported platform for the first release.
+
+## Risks
+
+- Snort on macOS is passive; PIGUI detects, PF enforces.
+- Polling-based process attribution is imperfect, especially for short flows
+  and UDP.
+- Domains are ambiguous for shared/CDN IPs and hidden DNS.
+- Snort control-socket commands are not a stable public ABI.
+- Log volume can grow quickly; retention and rotation are required.
+- The privileged helper is the highest-risk component and must remain narrow.
+- Native Windows Snort support is uncertain.
+- Living inside the Snort 3 repository has GPLv2 implications.
+- Tauri does not provide native AppKit controls; a SwiftUI shell may be added
+  later without changing the daemon protocol.
+
+## Decisions
+
+Resolved:
+
+- GUI stack: Rust + Tauri 2 with a Svelte frontend.
+- Storage: SQLite first; GUI preferences use a separate GUI-local SQLite file.
+- macOS first; Linux and Windows later.
+- PIGUI consumes Snort as an external process, not a linked library.
+- Snort control socket is preferred for management, with signal/file fallback.
+- Enforcement is firewall-based and off by default.
+- PIGUI is GPLv2-compatible while it lives in the Snort 3 tree.
+
+Still open:
+
+- Minimum macOS version. Current proposal: macOS 14+.
+- Whether the daemon and helper are separate binaries in the first milestone or
+  start as one development-only service and split before release.
+- Whether process-aware blocking is a later Network Extension effort.
+- Whether the ruleset is native Snort syntax or a custom DSL requiring a
+  compiler.
+- Windows native sensor versus WSL2/container/remote Linux sensor.
+- Distribution and notarization workflow.
+
+## License
+
+PIGUI is intended to be GPLv2-compatible while it lives inside the Snort 3
+repository. Confirm the final licensing and distribution model before any
+closed-source distribution or separate commercial packaging.

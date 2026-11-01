@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Read `PIGUI.md` first: it summarizes this branch and links the full design in
-`pigui/README.md`.
+`pigui/docs/README.md`.
 
 ## Directory split
 
