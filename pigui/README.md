@@ -325,6 +325,12 @@ endpoint_domains
 domain_trust
   registrable_domain, state, note, updated_at
 
+ptr_observations
+  ip, hostname, status, error, first_seen, last_seen, expires_at
+
+watched_domains
+  domain, registrable_domain, enabled, last_resolved_at, last_error
+
 alerts
   event_id, ts, gid, sid, rev, priority, class, msg,
   src_ip, src_port, dst_ip, dst_port, proto, action,
@@ -468,7 +474,8 @@ Primary views:
 | Processes | Activity Monitor-style process list with traffic and risk |
 | Connections | Live connection/flow table with process attribution |
 | Destinations | Remote endpoints, observed domains, bytes, processes, alerts, block state |
-| Domains | Registrable domains, hostnames, trust state, review flags, first/last seen |
+| Domains | Registrable domains, hostnames, sources, trust state, review flags, first/last seen |
+| DNS | Captured DNS queries, answers, types, rcodes, and timestamps |
 | Alerts | Triage, severity, rule, process, destination, actions |
 | Rules | Bundles, validation, activation, hit counts, rollback |
 | Firewall | Blocks, TTLs, allowlist, dry-run state, audit |
@@ -492,6 +499,21 @@ covers `api.spotify.com`). Unknown domains form the default review queue.
 Trusted domains are still shown when they have alerts or invalid TLS. Valid TLS
 is not treated as trust. Destinations without an observed DNS/TLS/HTTP/QUIC
 hostname are flagged as `no domain` rather than guessed.
+
+Domain data comes from four sources:
+
+- DNS responses captured by the Snort `dns` extractor.
+- TLS, QUIC, and HTTP hostnames observed on live connections.
+- PTR reverse lookups for public destination IPs, rate-limited and cached.
+- Watched domains that PIGUI periodically resolves and matches against observed
+  destination IPs.
+
+PTR and watched-domain matches are low-confidence hints and never auto-trust a
+domain. If DNS resolution happened before capture started, PTR, SNI, watched
+domains, existing database observations, and manual mapping are best-effort
+fallbacks; historical DNS cannot be reconstructed exactly. PIGUI runs the
+extractor with `default_filter = 'pick'`; if the extractor file does not grow
+while alerts arrive, the GUI reports the extractor as idle.
 
 ## Security Model
 
@@ -765,11 +787,15 @@ cd pigui
 
 This requests sudo credentials, validates the generated Snort config, starts
 Snort on `en0`, starts the daemon with `var/lib/pigui-live.db`, and opens the
-Tauri window. Useful commands:
+Tauri window. Snort output is written to `var/log/snort/snort.log`.
+The generated extractor uses `default_filter = 'pick'`; without it Snort would
+validate successfully but emit no DNS, TLS, HTTP, QUIC, or connection records.
+Useful commands:
 
 ```bash
 ./scripts/snort-live.sh          # run Snort in the foreground
 ./scripts/stop-live.sh           # stop Snort and the daemon
+./scripts/check-telemetry.sh     # show extractor, DNS, TLS, and domain counts
 
 ./target/debug/pigui-cli snort generate-config
 ./target/debug/pigui-cli snort status

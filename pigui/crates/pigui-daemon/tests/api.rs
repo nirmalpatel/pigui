@@ -10,8 +10,8 @@ use pigui_core::rpc::{
     AlertList, ConnectionList, DestinationDetail, DestinationList, DomainList, METHOD_ALERTS_LIST,
     METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST,
     METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL,
-    METHOD_PROCESSES_LIST, METHOD_SHUTDOWN, METHOD_STATUS, ProcessDetail, ProcessList,
-    StatusPayload,
+    METHOD_PROCESSES_LIST, METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST,
+    METHOD_WATCHED_REMOVE, ProcessDetail, ProcessList, StatusPayload, WatchedList,
 };
 use pigui_daemon::api;
 use pigui_daemon::state::AppState;
@@ -125,6 +125,9 @@ async fn serves_status_alerts_and_destinations() {
     let status: StatusPayload = client.call_typed(METHOD_STATUS, json!({})).unwrap();
     assert_eq!(status.alert_count, 5);
     assert_eq!(status.destination_count, 4);
+    assert_eq!(status.tls_count, 1);
+    assert_eq!(status.domain_count, 1);
+    assert!(!status.extractor_file.is_empty());
 
     let alerts: AlertList = client
         .call_typed(METHOD_ALERTS_LIST, json!({ "limit": 10 }))
@@ -183,6 +186,21 @@ async fn serves_status_alerts_and_destinations() {
         .call_typed(METHOD_DOMAINS_LIST, json!({ "limit": 10 }))
         .unwrap();
     assert_eq!(domains.domains[0].trust_state.as_str(), "trusted");
+
+    client
+        .call(METHOD_WATCHED_ADD, json!({ "domain": "open.spotify.com" }))
+        .unwrap();
+    let watched: WatchedList = client.call_typed(METHOD_WATCHED_LIST, json!({})).unwrap();
+    assert_eq!(watched.watched.len(), 1);
+    assert_eq!(watched.watched[0].registrable_domain, "spotify.com");
+    client
+        .call(
+            METHOD_WATCHED_REMOVE,
+            json!({ "domain": "open.spotify.com" }),
+        )
+        .unwrap();
+    let watched: WatchedList = client.call_typed(METHOD_WATCHED_LIST, json!({})).unwrap();
+    assert!(watched.watched.is_empty());
 
     client.call(METHOD_SHUTDOWN, json!({})).unwrap();
     tokio::time::timeout(Duration::from_secs(2), server)

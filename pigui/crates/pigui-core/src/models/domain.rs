@@ -62,6 +62,7 @@ pub struct EndpointDomain {
 pub struct DomainSummary {
     pub domain: String,
     pub hostnames: Vec<String>,
+    pub sources: Vec<String>,
     pub trust_state: TrustState,
     pub first_seen: i64,
     pub last_seen: i64,
@@ -69,6 +70,15 @@ pub struct DomainSummary {
     pub endpoint_count: u64,
     pub process_count: u64,
     pub flags: Vec<ReviewFlag>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchedDomain {
+    pub domain: String,
+    pub registrable_domain: String,
+    pub enabled: bool,
+    pub last_resolved_at: Option<i64>,
+    pub last_error: Option<String>,
 }
 
 #[cfg(test)]

@@ -8,8 +8,8 @@ use pigui_core::rpc::{
     AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, DomainList, FlowList,
     HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST,
     METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST,
-    METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST, ProcessList,
-    StatusPayload, TlsList,
+    METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD,
+    METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, ProcessList, StatusPayload, TlsList, WatchedList,
 };
 use pigui_daemon::ingest;
 use pigui_daemon::store::Store;
@@ -92,6 +92,17 @@ enum Command {
         domain: String,
         #[arg(value_parser = ["unknown", "trusted", "suspicious", "ignored"])]
         state: String,
+    },
+    /// List watched domains used for forward-resolution matching.
+    Watched {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add or remove a watched domain.
+    Watch {
+        domain: String,
+        #[arg(long)]
+        remove: bool,
     },
     /// List HTTP observations.
     Http {
@@ -234,6 +245,23 @@ fn main() -> anyhow::Result<()> {
                 METHOD_DOMAINS_SET_TRUST,
                 json!({ "registrable_domain": domain, "state": state }),
             )?;
+            println!("{result}");
+        }
+        Command::Watched { json } => {
+            let list: WatchedList = client(&config).call_typed(METHOD_WATCHED_LIST, json!({}))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                print_watched(&list);
+            }
+        }
+        Command::Watch { domain, remove } => {
+            let method = if remove {
+                METHOD_WATCHED_REMOVE
+            } else {
+                METHOD_WATCHED_ADD
+            };
+            let result = client(&config).call(method, json!({ "domain": domain }))?;
             println!("{result}");
         }
         Command::Dns { limit, json } => {
@@ -384,6 +412,18 @@ fn print_status(status: &StatusPayload, config: &Config) {
     println!("  active procs:    {}", status.active_processes);
     println!("  alerts ingested: {}", status.alerts_ingested);
     println!("  extractor rows:  {}", status.extractor_ingested);
+    println!("  extractor file:  {}", status.extractor_file);
+    println!("  extractor size:  {} bytes", status.extractor_size);
+    println!(
+        "  extractor last:  {}",
+        optional(status.extractor_last_ingest)
+    );
+    println!("  extractor idle:  {}", yes_no(status.extractor_idle));
+    println!("  dns records:     {}", status.dns_count);
+    println!("  tls records:     {}", status.tls_count);
+    println!("  http records:    {}", status.http_count);
+    println!("  quic records:    {}", status.quic_count);
+    println!("  domains:         {}", status.domain_count);
     println!("  parse errors:    {}", status.parse_errors);
     println!("  config dir:      {}", config.home.display());
 
@@ -466,18 +506,40 @@ fn print_destinations(list: &DestinationList) {
 fn print_domains(list: &DomainList) {
     println!("{} domains (showing {})", list.total, list.domains.len());
     println!(
-        "{:<32} {:<10} {:<8} {:<10} {:<10} hostnames",
-        "domain", "trust", "ips", "processes", "observed"
+        "{:<32} {:<10} {:<8} {:<10} {:<10} {:<16} hostnames",
+        "domain", "trust", "ips", "processes", "observed", "sources"
     );
     for domain in &list.domains {
         println!(
-            "{:<32} {:<10} {:<8} {:<10} {:<10} {}",
+            "{:<32} {:<10} {:<8} {:<10} {:<10} {:<16} {}",
             domain.domain,
             domain.trust_state,
             domain.endpoint_count,
             domain.process_count,
             domain.observation_count,
+            domain.sources.join(","),
             domain.hostnames.join(","),
+        );
+    }
+}
+
+fn print_watched(list: &WatchedList) {
+    println!("{} watched domains", list.watched.len());
+    println!(
+        "{:<32} {:<32} {:<10} last resolved",
+        "domain", "registrable", "status"
+    );
+    for watched in &list.watched {
+        println!(
+            "{:<32} {:<32} {:<10} {}",
+            watched.domain,
+            watched.registrable_domain,
+            if watched.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            optional(watched.last_resolved_at),
         );
     }
 }

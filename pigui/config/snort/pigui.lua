@@ -27,7 +27,7 @@ extractor =
     formatting = 'json',
     connector = 'pigui_events',
     time = 'unix',
-    default_filter = 'skip',
+    default_filter = 'pick',
     protocols =
     {
         { service = 'conn', on_events = 'eof',

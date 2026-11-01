@@ -7,7 +7,7 @@ pub mod live;
 
 pub use alert::Alert;
 pub use capability::SnortCapabilities;
-pub use domain::{DomainSummary, EndpointDomain, ReviewFlag, TrustState};
+pub use domain::{DomainSummary, EndpointDomain, ReviewFlag, TrustState, WatchedDomain};
 pub use endpoint::Destination;
 pub use extractor::ExtractorRecord;
 pub use live::{

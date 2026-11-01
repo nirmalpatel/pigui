@@ -19,6 +19,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+dns-lookup = "4"
 dotenvy = "0.15"
 psl = "2"
 rusqlite = { version = "0.41", features = ["bundled"] }

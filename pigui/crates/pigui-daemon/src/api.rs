@@ -1,5 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use pigui_core::error::{Error, Result};
 use pigui_core::rpc::{
@@ -8,8 +9,9 @@ use pigui_core::rpc::{
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
     METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST,
     METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_QUIC_LIST, METHOD_SHUTDOWN,
-    METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST, ProcessList, ProcessQuery, QuicList,
-    Request, Response, SetTrustRequest, SnortStatusPayload, StatusPayload, TlsList,
+    METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST,
+    METHOD_WATCHED_REMOVE, ProcessList, ProcessQuery, QuicList, Request, Response, SetTrustRequest,
+    SnortStatusPayload, StatusPayload, TlsList, WatchedList, WatchedRequest,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -98,6 +100,9 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
         METHOD_CONNECTIONS_LIST => list_connections(state, request.params),
         METHOD_DOMAINS_LIST => list_domains(state, request.params),
         METHOD_DOMAINS_SET_TRUST => set_domain_trust(state, request.params),
+        METHOD_WATCHED_LIST => list_watched_domains(state),
+        METHOD_WATCHED_ADD => add_watched_domain(state, request.params),
+        METHOD_WATCHED_REMOVE => remove_watched_domain(state, request.params),
         METHOD_DNS_LIST => list_dns(state, request.params),
         METHOD_TLS_LIST => list_tls(state, request.params),
         METHOD_HTTP_LIST => list_http(state, request.params),
@@ -116,16 +121,49 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
 }
 
 fn status(state: &AppState) -> Result<StatusPayload> {
-    let (alert_count, destination_count, active_flows, active_processes) =
-        query_store(state, |store| {
-            Ok((
-                store.count_alerts()?,
-                store.count_destinations()?,
-                store.count_flows()?,
-                store.count_processes()?,
-            ))
-        })?;
+    let (
+        alert_count,
+        destination_count,
+        active_flows,
+        active_processes,
+        dns_count,
+        tls_count,
+        http_count,
+        quic_count,
+        domain_count,
+    ) = query_store(state, |store| {
+        Ok((
+            store.count_alerts()?,
+            store.count_destinations()?,
+            store.count_flows()?,
+            store.count_processes()?,
+            store.count_dns()?,
+            store.count_tls()?,
+            store.count_http()?,
+            store.count_quic()?,
+            store.count_domains()?,
+        ))
+    })?;
     let snort = pigui_snort::status::status(&state.config);
+    let extractor_metadata = std::fs::metadata(&state.config.extractor_json).ok();
+    let extractor_size = extractor_metadata
+        .as_ref()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let extractor_modified = extractor_metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64);
+    let alerts_ingested = state
+        .alerts_ingested
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let extractor_ingested = state
+        .extractor_ingested
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let extractor_idle = state.config.mode == "live"
+        && alerts_ingested > 0
+        && extractor_ingested == 0
+        && state.uptime_secs() > 30;
 
     Ok(StatusPayload {
         capabilities: state.capabilities.clone(),
@@ -133,9 +171,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         alert_json: state.config.alert_json.display().to_string(),
         socket_path: state.config.socket_path.display().to_string(),
         uptime_secs: state.uptime_secs(),
-        alerts_ingested: state
-            .alerts_ingested
-            .load(std::sync::atomic::Ordering::Relaxed),
+        alerts_ingested,
         parse_errors: state
             .parse_errors
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -148,9 +184,17 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         snort_interface: snort.interface,
         active_flows,
         active_processes,
-        extractor_ingested: state
-            .extractor_ingested
-            .load(std::sync::atomic::Ordering::Relaxed),
+        extractor_ingested,
+        extractor_file: state.config.extractor_json.display().to_string(),
+        extractor_size,
+        extractor_modified,
+        extractor_last_ingest: state.extractor_last_ingest(),
+        extractor_idle,
+        dns_count,
+        tls_count,
+        http_count,
+        quic_count,
+        domain_count,
         collector_error: state.collector_error(),
     })
 }
@@ -240,6 +284,23 @@ fn set_domain_trust(state: &AppState, params: Value) -> Result<Value> {
             request.note.as_deref(),
         )
     })?;
+    Ok(Value::from(true))
+}
+
+fn list_watched_domains(state: &AppState) -> Result<Value> {
+    let watched = query_store(state, |store| store.list_watched_domains())?;
+    Ok(serde_json::to_value(WatchedList { watched })?)
+}
+
+fn add_watched_domain(state: &AppState, params: Value) -> Result<Value> {
+    let request: WatchedRequest = serde_json::from_value(params)?;
+    let watched = query_store(state, |store| store.add_watched_domain(&request.domain))?;
+    Ok(serde_json::to_value(watched)?)
+}
+
+fn remove_watched_domain(state: &AppState, params: Value) -> Result<Value> {
+    let request: WatchedRequest = serde_json::from_value(params)?;
+    query_store(state, |store| store.remove_watched_domain(&request.domain))?;
     Ok(Value::from(true))
 }
 

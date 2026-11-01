@@ -8,6 +8,7 @@ use pigui_core::error::{Error, Result};
 use pigui_core::models::{
     Alert, Connection, Destination, DnsObservation, DomainSummary, EndpointDomain, ExtractorRecord,
     Flow, HttpObservation, Process, QuicObservation, ReviewFlag, TlsObservation, TrustState,
+    WatchedDomain,
 };
 use pigui_core::rpc::{
     AlertRecord, DestinationDetail, DestinationProcess, ProcessDestination, ProcessDetail,
@@ -234,7 +235,25 @@ CREATE TABLE IF NOT EXISTS domain_trust (
     updated_at INTEGER NOT NULL
 );
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '3');
+CREATE TABLE IF NOT EXISTS ptr_observations (
+    ip TEXT PRIMARY KEY,
+    hostname TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS watched_domains (
+    domain TEXT PRIMARY KEY,
+    registrable_domain TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_resolved_at INTEGER,
+    last_error TEXT
+);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '4');
 "#;
 
 const INSERT_ALERT: &str = r#"
@@ -465,7 +484,7 @@ impl Store {
         let previous_version = read_schema_version(&conn)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         ensure_endpoints_hostname(&conn)?;
-        if previous_version.as_deref() != Some("3") {
+        if !matches!(previous_version.as_deref(), Some("3" | "4")) {
             backfill_domains(&conn)?;
         }
         Ok(Self { conn })
@@ -706,6 +725,13 @@ impl Store {
                         MAX(d.last_seen),
                         SUM(d.observation_count),
                         GROUP_CONCAT(d.domain, char(31)),
+                        (SELECT GROUP_CONCAT(source, char(31))
+                         FROM (
+                             SELECT DISTINCT ed.source AS source
+                             FROM endpoint_domains ed
+                             JOIN domains dd ON dd.domain = ed.domain
+                             WHERE dd.registrable_domain = d.registrable_domain
+                         )),
                         (SELECT COUNT(DISTINCT ed.ip)
                          FROM endpoint_domains ed
                          JOIN domains dd ON dd.domain = ed.domain
@@ -755,6 +781,7 @@ impl Store {
                 let trust_state = TrustState::parse(&trust).unwrap_or_default();
                 let first_seen: i64 = row.get(2)?;
                 let hostnames: Option<String> = row.get(5)?;
+                let sources: Option<String> = row.get(6)?;
                 let mut flags = Vec::new();
                 if trust_state == TrustState::Unknown {
                     flags.push(ReviewFlag::UnknownTrust);
@@ -762,10 +789,10 @@ impl Store {
                 if now.saturating_sub(first_seen) <= 86_400 {
                     flags.push(ReviewFlag::NewDomain);
                 }
-                if row.get::<_, i64>(8)? != 0 {
+                if row.get::<_, i64>(9)? != 0 {
                     flags.push(ReviewFlag::Alerts);
                 }
-                if row.get::<_, i64>(9)? != 0 {
+                if row.get::<_, i64>(10)? != 0 {
                     flags.push(ReviewFlag::InvalidTls);
                 }
                 Ok(DomainSummary {
@@ -776,12 +803,18 @@ impl Store {
                         .filter(|value| !value.is_empty())
                         .map(str::to_string)
                         .collect(),
+                    sources: sources
+                        .unwrap_or_default()
+                        .split('\u{1f}')
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect(),
                     trust_state,
                     first_seen,
                     last_seen: row.get(3)?,
                     observation_count: row.get::<_, i64>(4)? as u64,
-                    endpoint_count: row.get::<_, i64>(6)? as u64,
-                    process_count: row.get::<_, i64>(7)? as u64,
+                    endpoint_count: row.get::<_, i64>(7)? as u64,
+                    process_count: row.get::<_, i64>(8)? as u64,
                     flags,
                 })
             })
@@ -823,6 +856,173 @@ impl Store {
             )
             .map_err(db)?;
         Ok(())
+    }
+
+    pub fn list_watched_domains(&self) -> Result<Vec<WatchedDomain>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT domain, registrable_domain, enabled, last_resolved_at, last_error
+                 FROM watched_domains
+                 ORDER BY domain ASC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(WatchedDomain {
+                    domain: row.get(0)?,
+                    registrable_domain: row.get(1)?,
+                    enabled: row.get::<_, i64>(2)? != 0,
+                    last_resolved_at: row.get(3)?,
+                    last_error: row.get(4)?,
+                })
+            })
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn add_watched_domain(&self, domain: &str) -> Result<WatchedDomain> {
+        let hostname = normalize_hostname(domain)
+            .ok_or_else(|| Error::Parse(format!("invalid domain for watched list: {domain}")))?;
+        let registrable = registrable_domain(&hostname);
+        self.conn
+            .execute(
+                "INSERT INTO watched_domains (domain, registrable_domain, enabled)
+                 VALUES (?1, ?2, 1)
+                 ON CONFLICT(domain) DO UPDATE SET enabled = 1",
+                params![hostname, registrable],
+            )
+            .map_err(db)?;
+        self.watched_domain(&hostname)?
+            .ok_or_else(|| Error::Database("watched domain was not stored".into()))
+    }
+
+    pub fn remove_watched_domain(&self, domain: &str) -> Result<()> {
+        let hostname = normalize_hostname(domain)
+            .unwrap_or_else(|| domain.trim().trim_end_matches('.').to_ascii_lowercase());
+        self.conn
+            .execute(
+                "DELETE FROM watched_domains WHERE domain = ?1",
+                params![hostname],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    pub fn due_watched_domains(
+        &self,
+        now: i64,
+        interval_secs: i64,
+        limit: u32,
+    ) -> Result<Vec<String>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT domain FROM watched_domains
+                 WHERE enabled != 0
+                   AND (last_resolved_at IS NULL OR last_resolved_at <= ?1)
+                 ORDER BY COALESCE(last_resolved_at, 0) ASC
+                 LIMIT ?2",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![now - interval_secs, limit], |row| row.get(0))
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn save_watched_result(
+        &self,
+        domain: &str,
+        ips: &[String],
+        error: Option<&str>,
+        now: i64,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE watched_domains
+                 SET last_resolved_at = ?1, last_error = ?2
+                 WHERE domain = ?3",
+                params![now, error, domain],
+            )
+            .map_err(db)?;
+        if error.is_none() {
+            for ip in ips {
+                record_domain_mapping(&self.conn, ip, domain, None, "watched", now)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn pending_ptr_ips(&self, now: i64, limit: u32) -> Result<Vec<String>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT e.ip FROM endpoints e
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM endpoint_domains ed WHERE ed.ip = e.ip
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM ptr_observations p
+                     WHERE p.ip = e.ip AND p.expires_at > ?1
+                 )
+                 ORDER BY e.last_seen DESC
+                 LIMIT ?2",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![now, limit], |row| row.get(0))
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn save_ptr_result(
+        &self,
+        ip: &str,
+        hostname: Option<&str>,
+        status: &str,
+        error: Option<&str>,
+        now: i64,
+    ) -> Result<()> {
+        let expires_at = now + if status == "ok" { 86_400 } else { 21_600 };
+        self.conn
+            .execute(
+                "INSERT INTO ptr_observations (
+                     ip, hostname, status, error, first_seen, last_seen, expires_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+                 ON CONFLICT(ip) DO UPDATE SET
+                     hostname = excluded.hostname,
+                     status = excluded.status,
+                     error = excluded.error,
+                     last_seen = excluded.last_seen,
+                     expires_at = excluded.expires_at",
+                params![ip, hostname, status, error, now, expires_at],
+            )
+            .map_err(db)?;
+        if let Some(hostname) = hostname {
+            record_domain_mapping(&self.conn, ip, hostname, None, "ptr", now)?;
+        }
+        Ok(())
+    }
+
+    fn watched_domain(&self, domain: &str) -> Result<Option<WatchedDomain>> {
+        self.conn
+            .query_row(
+                "SELECT domain, registrable_domain, enabled, last_resolved_at, last_error
+                 FROM watched_domains WHERE domain = ?1",
+                params![domain],
+                |row| {
+                    Ok(WatchedDomain {
+                        domain: row.get(0)?,
+                        registrable_domain: row.get(1)?,
+                        enabled: row.get::<_, i64>(2)? != 0,
+                        last_resolved_at: row.get(3)?,
+                        last_error: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(db)
     }
 
     pub fn destination_detail(&self, ip: &str) -> Result<Option<DestinationDetail>> {
@@ -2053,6 +2253,48 @@ mod tests {
             .unwrap();
         assert!(domain.flags.contains(&ReviewFlag::Alerts));
         assert!(domain.flags.contains(&ReviewFlag::InvalidTls));
+    }
+
+    #[test]
+    fn watched_domains_map_resolved_ips() {
+        let store = Store::open_in_memory().unwrap();
+        let watched = store.add_watched_domain("api.spotify.com").unwrap();
+        assert_eq!(watched.registrable_domain, "spotify.com");
+        assert_eq!(store.list_watched_domains().unwrap().len(), 1);
+        assert_eq!(store.due_watched_domains(1000, 0, 10).unwrap().len(), 1);
+
+        store
+            .save_watched_result(
+                "api.spotify.com",
+                &["198.51.100.10".to_string()],
+                None,
+                1000,
+            )
+            .unwrap();
+        let domains = store.endpoint_domains("198.51.100.10").unwrap();
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].source, "watched");
+        assert!(store.due_watched_domains(1001, 60, 10).unwrap().is_empty());
+
+        store.remove_watched_domain("api.spotify.com").unwrap();
+        assert!(store.list_watched_domains().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ptr_results_are_cached_and_mapped() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .insert_alerts(&[alert(10, 1, "203.0.113.9", 443)])
+            .unwrap();
+        assert_eq!(store.pending_ptr_ips(100, 10).unwrap().len(), 1);
+
+        store
+            .save_ptr_result("203.0.113.9", Some("host.example.com"), "ok", None, 100)
+            .unwrap();
+        let domains = store.endpoint_domains("203.0.113.9").unwrap();
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].source, "ptr");
+        assert!(store.pending_ptr_ips(101, 10).unwrap().is_empty());
     }
 
     #[test]

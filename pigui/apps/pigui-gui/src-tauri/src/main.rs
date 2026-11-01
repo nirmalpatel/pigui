@@ -6,8 +6,9 @@ use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
 use pigui_core::rpc::{
     METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL,
-    METHOD_DESTINATIONS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST,
-    METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_STATUS,
+    METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST,
+    METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_STATUS,
+    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
 };
 use pigui_core::settings::{AppSettings, ThemeMode};
 use serde_json::{Value, json};
@@ -131,6 +132,34 @@ fn list_domains(limit: Option<u32>) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn list_dns(limit: Option<u32>) -> Result<Value, String> {
+    client()?
+        .call(METHOD_DNS_LIST, json!({ "limit": limit.unwrap_or(500) }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_watched_domains() -> Result<Value, String> {
+    client()?
+        .call(METHOD_WATCHED_LIST, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_watched_domain(domain: String) -> Result<Value, String> {
+    client()?
+        .call(METHOD_WATCHED_ADD, json!({ "domain": domain }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_watched_domain(domain: String) -> Result<Value, String> {
+    client()?
+        .call(METHOD_WATCHED_REMOVE, json!({ "domain": domain }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_domain_trust(
     registrable_domain: String,
     state: String,
@@ -166,6 +195,10 @@ fn main() {
             list_destinations,
             destination_detail,
             list_domains,
+            list_dns,
+            list_watched_domains,
+            add_watched_domain,
+            remove_watched_domain,
             set_domain_trust,
             list_flows,
             list_processes,

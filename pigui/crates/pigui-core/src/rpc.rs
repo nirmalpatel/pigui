@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::models::{
     Alert, Connection, Destination, DnsObservation, DomainSummary, EndpointDomain, Flow,
     HttpObservation, Process, QuicObservation, ReviewFlag, SnortCapabilities, TlsObservation,
-    TrustState,
+    TrustState, WatchedDomain,
 };
 
 pub const METHOD_STATUS: &str = "status";
@@ -18,6 +18,9 @@ pub const METHOD_DESTINATIONS_DETAIL: &str = "destinations.detail";
 pub const METHOD_PROCESSES_DETAIL: &str = "processes.detail";
 pub const METHOD_DOMAINS_LIST: &str = "domains.list";
 pub const METHOD_DOMAINS_SET_TRUST: &str = "domains.set_trust";
+pub const METHOD_WATCHED_LIST: &str = "watched.list";
+pub const METHOD_WATCHED_ADD: &str = "watched.add";
+pub const METHOD_WATCHED_REMOVE: &str = "watched.remove";
 pub const METHOD_DNS_LIST: &str = "dns.list";
 pub const METHOD_TLS_LIST: &str = "tls.list";
 pub const METHOD_HTTP_LIST: &str = "http.list";
@@ -169,6 +172,16 @@ pub struct DomainList {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchedList {
+    pub watched: Vec<WatchedDomain>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchedRequest {
+    pub domain: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestinationQuery {
     pub ip: String,
 }
@@ -248,6 +261,26 @@ pub struct StatusPayload {
     pub active_processes: u64,
     #[serde(default)]
     pub extractor_ingested: u64,
+    #[serde(default)]
+    pub extractor_file: String,
+    #[serde(default)]
+    pub extractor_size: u64,
+    #[serde(default)]
+    pub extractor_modified: Option<i64>,
+    #[serde(default)]
+    pub extractor_last_ingest: Option<i64>,
+    #[serde(default)]
+    pub extractor_idle: bool,
+    #[serde(default)]
+    pub dns_count: u64,
+    #[serde(default)]
+    pub tls_count: u64,
+    #[serde(default)]
+    pub http_count: u64,
+    #[serde(default)]
+    pub quic_count: u64,
+    #[serde(default)]
+    pub domain_count: u64,
     #[serde(default)]
     pub collector_error: Option<String>,
 }

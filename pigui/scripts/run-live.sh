@@ -19,7 +19,7 @@ fi
 echo "requesting sudo credentials for live capture..."
 sudo -v
 
-"$SCRIPT_DIR/snort-live.sh" &
+"$SCRIPT_DIR/snort-live.sh" >"$PIGUI_SNORT_LOG_DIR/snort.log" 2>&1 &
 SNORT_WRAPPER_PID=$!
 SNORT_PID=""
 DAEMON_PID=""

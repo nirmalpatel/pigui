@@ -40,6 +40,16 @@
     active_flows: number;
     active_processes: number;
     extractor_ingested: number;
+    extractor_file: string;
+    extractor_size: number;
+    extractor_modified?: number;
+    extractor_last_ingest?: number;
+    extractor_idle: boolean;
+    dns_count: number;
+    tls_count: number;
+    http_count: number;
+    quic_count: number;
+    domain_count: number;
     collector_error?: string;
   }
 
@@ -68,6 +78,34 @@
     total: number;
   }
 
+  interface DnsObservation {
+    id: number;
+    ts: number;
+    client_ip?: string;
+    query?: string;
+    qtype?: string;
+    rcode?: string;
+    answers?: string;
+    ttl?: string;
+  }
+
+  interface DnsList {
+    observations: DnsObservation[];
+    total: number;
+  }
+
+  interface WatchedDomain {
+    domain: string;
+    registrable_domain: string;
+    enabled: boolean;
+    last_resolved_at?: number;
+    last_error?: string;
+  }
+
+  interface WatchedList {
+    watched: WatchedDomain[];
+  }
+
   type TrustState = "unknown" | "trusted" | "suspicious" | "ignored";
   type ReviewFlag =
     | "new_domain"
@@ -89,6 +127,7 @@
   interface DomainSummary {
     domain: string;
     hostnames: string[];
+    sources: string[];
     trust_state: TrustState;
     first_seen: number;
     last_seen: number;
@@ -223,6 +262,7 @@
     | "processes"
     | "destinations"
     | "domains"
+    | "dns"
     | "alerts"
     | "capture";
 
@@ -234,6 +274,9 @@
   let processes = $state<Process[]>([]);
   let connections = $state<Connection[]>([]);
   let domains = $state<DomainSummary[]>([]);
+  let dnsObservations = $state<DnsObservation[]>([]);
+  let watchedDomains = $state<WatchedDomain[]>([]);
+  let watchedInput = $state("");
   let domainTrustFilter = $state("all");
   let expandedProcess = $state<number | null>(null);
   let processDetail = $state<ProcessDetail | null>(null);
@@ -300,6 +343,16 @@
     domains.filter((domain) => needsReview(domain)).length,
   );
 
+  const filteredDns = $derived(
+    filterItems(dnsObservations, filter, (observation) => [
+      observation.query,
+      observation.answers,
+      observation.qtype,
+      observation.rcode,
+      observation.client_ip,
+    ]),
+  );
+
   const filteredAlerts = $derived(
     filterItems(alerts, filter, (alert) => [
       alert.msg,
@@ -339,6 +392,7 @@
     { id: "processes", label: "Processes" },
     { id: "destinations", label: "Destinations" },
     { id: "domains", label: "Domains" },
+    { id: "dns", label: "DNS" },
     { id: "alerts", label: "Alerts" },
     { id: "capture", label: "Capture" },
   ];
@@ -360,6 +414,8 @@
         nextProcesses,
         nextConnections,
         nextDomains,
+        nextDns,
+        nextWatched,
       ] = await Promise.all([
         invoke<StatusPayload>("get_status"),
         invoke<AlertList>("list_alerts", { limit: 200 }),
@@ -368,6 +424,8 @@
         invoke<ProcessList>("list_processes", { limit: 200 }),
         invoke<ConnectionList>("list_connections", { limit: 200 }),
         invoke<DomainList>("list_domains", { limit: 300 }),
+        invoke<DnsList>("list_dns", { limit: 500 }),
+        invoke<WatchedList>("list_watched_domains"),
       ]);
       status = nextStatus;
       alerts = nextAlerts.alerts;
@@ -376,6 +434,8 @@
       processes = nextProcesses.processes;
       connections = nextConnections.connections;
       domains = nextDomains.domains;
+      dnsObservations = nextDns.observations;
+      watchedDomains = nextWatched.watched;
       error = null;
       lastUpdated = new Date().toLocaleTimeString();
     } catch (cause) {
@@ -508,6 +568,27 @@
       await refresh();
     } catch (cause) {
       console.warn("Unable to update domain trust", cause);
+    }
+  }
+
+  async function addWatchedDomain() {
+    const domain = watchedInput.trim();
+    if (!domain) return;
+    try {
+      await invoke("add_watched_domain", { domain });
+      watchedInput = "";
+      await refresh();
+    } catch (cause) {
+      console.warn("Unable to add watched domain", cause);
+    }
+  }
+
+  async function removeWatchedDomain(domain: string) {
+    try {
+      await invoke("remove_watched_domain", { domain });
+      await refresh();
+    } catch (cause) {
+      console.warn("Unable to remove watched domain", cause);
     }
   }
 
@@ -655,6 +736,13 @@
         </ul>
       </section>
     {/if}
+    {#if status.extractor_idle}
+      <section class="banner warning">
+        <strong>Extractor is not producing telemetry.</strong>
+        Alerts are arriving but no DNS, TLS, HTTP, QUIC, or connection records have
+        been ingested. Stop Snort, regenerate the configuration, and restart live capture.
+      </section>
+    {/if}
 
     <nav class="tabs">
       {#each tabs as item}
@@ -675,6 +763,8 @@
             <span class="count">{destinations.length}</span>
           {:else if item.id === "domains" && needsReviewCount > 0}
             <span class="count review-count">{needsReviewCount}</span>
+          {:else if item.id === "dns" && dnsObservations.length}
+            <span class="count">{dnsObservations.length}</span>
           {:else if item.id === "alerts" && alerts.length}
             <span class="count">{alerts.length}</span>
           {/if}
@@ -715,6 +805,16 @@
           <span class="label">Destinations</span>
           <span class="value">{status.destination_count}</span>
           <span class="hint">known remote endpoints</span>
+        </article>
+        <article>
+          <span class="label">DNS records</span>
+          <span class="value">{status.dns_count}</span>
+          <span class="hint">{status.tls_count} TLS · {status.http_count} HTTP · {status.quic_count} QUIC</span>
+        </article>
+        <article>
+          <span class="label">Domains</span>
+          <span class="value">{status.domain_count}</span>
+          <span class="hint">registrable domains observed</span>
         </article>
         <article>
           <span class="label">Needs review</span>
@@ -1014,6 +1114,46 @@
         </div>
       </section>
     {:else if tab === "domains"}
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Watched domains</h2>
+          <div class="panel-tools">
+            <input
+              type="text"
+              placeholder="spotify.com"
+              bind:value={watchedInput}
+              onkeydown={(event) => {
+                if (event.key === "Enter") void addWatchedDomain();
+              }}
+            />
+            <button onclick={() => void addWatchedDomain()} disabled={!watchedInput.trim()}>
+              Watch
+            </button>
+          </div>
+        </div>
+        <div class="watch-list">
+          {#each watchedDomains as watched (watched.domain)}
+            <span class="watch-item">
+              <span>{watched.domain}</span>
+              {#if watched.last_error}
+                <span class="watch-error">{watched.last_error}</span>
+              {:else if watched.last_resolved_at}
+                <span class="sub">resolved {formatTime(watched.last_resolved_at)}</span>
+              {:else}
+                <span class="sub">pending</span>
+              {/if}
+              <button onclick={() => void removeWatchedDomain(watched.domain)}>
+                Remove
+              </button>
+            </span>
+          {:else}
+            <span class="detail-note">
+              Add domains such as spotify.com to resolve them periodically and match observed IPs.
+            </span>
+          {/each}
+        </div>
+      </section>
+
       <section class="panel fill">
         <div class="panel-header">
           <h2>Domains</h2>
@@ -1033,7 +1173,7 @@
           <table>
             <thead>
               <tr>
-                <th>Registrable domain</th><th>Hostnames</th><th>Trust</th><th>Flags</th>
+                <th>Registrable domain</th><th>Hostnames</th><th>Sources</th><th>Trust</th><th>Flags</th>
                 <th>IPs</th><th>Processes</th><th>Observed</th><th>First seen</th>
                 <th>Last seen</th><th>Mark</th>
               </tr>
@@ -1043,6 +1183,7 @@
                 <tr>
                   <td class="domain">{domain.domain}</td>
                   <td class="sub">{domain.hostnames.join(", ")}</td>
+                  <td>{domain.sources.length ? domain.sources.join(", ") : "-"}</td>
                   <td><span class="tag {domain.trust_state}">{domain.trust_state}</span></td>
                   <td>{domain.flags.length ? domain.flags.map(flagLabel).join(", ") : "-"}</td>
                   <td>{domain.endpoint_count}</td>
@@ -1069,7 +1210,49 @@
                   </td>
                 </tr>
               {:else}
-                <tr><td class="empty" colspan="10">No domains observed yet.</td></tr>
+                <tr>
+                  <td class="empty" colspan="11">
+                    No domains observed yet. Check the DNS tab and extractor health;
+                    DNS must be captured on port 53 while PIGUI is running.
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {:else if tab === "dns"}
+      <section class="panel fill">
+        <div class="panel-header">
+          <h2>DNS observations</h2>
+          <input type="search" placeholder="Filter DNS" bind:value={filter} />
+        </div>
+        <div class="table-wrap tall">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>Client</th><th>Query</th><th>Type</th>
+                <th>Rcode</th><th>Answers</th><th>TTL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each filteredDns as observation (observation.id)}
+                <tr>
+                  <td class="mono">{formatTime(observation.ts)}</td>
+                  <td class="mono">{observation.client_ip ?? "-"}</td>
+                  <td class="domain">{observation.query ?? "-"}</td>
+                  <td>{observation.qtype ?? "-"}</td>
+                  <td>{observation.rcode ?? "-"}</td>
+                  <td class="mono">{observation.answers ?? "-"}</td>
+                  <td class="mono">{observation.ttl ?? "-"}</td>
+                </tr>
+              {:else}
+                <tr>
+                  <td class="empty" colspan="7">
+                    No DNS observations yet. DNS responses must be observed on port 53
+                    while capture is running; DoH/DoT traffic will not appear here.
+                  </td>
+                </tr>
               {/each}
             </tbody>
           </table>
@@ -1134,10 +1317,15 @@
         </article>
         <article class="card">
           <span class="label">Extractor</span>
-          <span class="value" class:ok={status.capabilities.extractor}>
-            {status.capabilities.extractor ? "available" : "unavailable"}
+          <span class="value" class:ok={status.capabilities.extractor && !status.extractor_idle} class:warn={status.extractor_idle}>
+            {status.extractor_idle ? "idle" : status.capabilities.extractor ? "available" : "unavailable"}
           </span>
-          <span class="hint">{status.extractor_ingested} rows ingested</span>
+          <span class="hint">{status.extractor_ingested} rows · {formatBytes(status.extractor_size)}</span>
+        </article>
+        <article class="card">
+          <span class="label">Extractor last record</span>
+          <span class="value">{status.extractor_last_ingest ? formatTime(status.extractor_last_ingest) : "never"}</span>
+          <span class="hint">{status.dns_count} DNS · {status.tls_count} TLS · {status.domain_count} domains</span>
         </article>
         <article class="card">
           <span class="label">Collector</span>
@@ -1154,6 +1342,7 @@
           <div><span class="label">database</span><code>{status.db_path}</code></div>
           <div><span class="label">daemon socket</span><code>{status.socket_path}</code></div>
           <div><span class="label">alert json</span><code>{status.alert_json}</code></div>
+          <div><span class="label">extractor json</span><code>{status.extractor_file}</code></div>
           <div><span class="label">config</span><code>{status.capabilities.config_path ?? "-"}</code></div>
         </div>
       </section>
@@ -1220,7 +1409,7 @@
   .panel.fill { flex: 1; min-height: 0; }
   .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
   h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.2px; }
-  input[type="search"] { width: min(280px, 45vw); border: 1px solid var(--border-strong); background: var(--input-bg); color: var(--text); border-radius: 7px; padding: 6px 9px; font: inherit; }
+  input[type="search"], input[type="text"] { width: min(280px, 45vw); border: 1px solid var(--border-strong); background: var(--input-bg); color: var(--text); border-radius: 7px; padding: 6px 9px; font: inherit; }
   .table-wrap { max-height: 360px; overflow: auto; min-width: 0; }
   .table-wrap.short { max-height: clamp(180px, 30vh, 320px); }
   .table-wrap.tall { max-height: clamp(240px, 45vh, 900px); }
@@ -1249,11 +1438,15 @@
   .detail-block { display: flex; flex-direction: column; gap: 8px; }
   .detail-heading { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; }
   .detail-note { color: var(--text-muted); font-size: 12px; }
+  .watch-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
+  .watch-item { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 4px 6px 4px 12px; font-size: 12px; }
+  .watch-item button { padding: 2px 8px; font-size: 11px; border-radius: 999px; }
+  .watch-error { color: var(--danger); font-size: 11px; }
   table.inner { font-size: 12px; }
   table.inner th { background: transparent; }
   table.inner td { white-space: nowrap; }
   .domain { font-weight: 600; }
-  .empty { text-align: center; color: var(--text-faint); padding: 24px; }
+  .empty { text-align: center; color: var(--text-faint); padding: 24px; white-space: normal; }
   .paths { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
   .paths div { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   .paths code { color: var(--text-code); word-break: break-all; }

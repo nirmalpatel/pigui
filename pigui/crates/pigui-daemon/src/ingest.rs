@@ -1,3 +1,4 @@
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,7 +120,7 @@ pub async fn run_extractor(state: Arc<AppState>, mut tailer: Tailer) {
             }
         }
 
-        state.record_extractor(inserted, malformed);
+        state.record_extractor(inserted, malformed, crate::store::unix_now());
         if inserted > 0 || malformed > 0 {
             tracing::info!(inserted, malformed, "ingested extractor batch");
         }
@@ -168,6 +169,111 @@ pub fn spawn_process_collector(state: Arc<AppState>) {
     });
 }
 
+pub fn spawn_name_resolver(state: Arc<AppState>) {
+    std::thread::spawn(move || {
+        while !state.is_shutting_down() {
+            resolve_ptr_names(&state);
+            resolve_watched_domains(&state);
+            for _ in 0..150 {
+                if state.is_shutting_down() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    });
+}
+
+fn resolve_ptr_names(state: &Arc<AppState>) {
+    let now = crate::store::unix_now();
+    let ips = match state.store.lock() {
+        Ok(store) => store.pending_ptr_ips(now, 10).unwrap_or_default(),
+        Err(_) => return,
+    };
+
+    for ip in ips {
+        if state.is_shutting_down() {
+            break;
+        }
+        let Ok(address) = ip.parse::<IpAddr>() else {
+            continue;
+        };
+        if !is_public_ip(address) {
+            if let Ok(store) = state.store.lock() {
+                let _ =
+                    store.save_ptr_result(&ip, None, "skipped", Some("non-public address"), now);
+            }
+            continue;
+        }
+
+        let result = dns_lookup::lookup_addr(&address);
+        if let Ok(store) = state.store.lock() {
+            match result {
+                Ok(hostname) => {
+                    let _ = store.save_ptr_result(&ip, Some(&hostname), "ok", None, now);
+                }
+                Err(error) => {
+                    let _ =
+                        store.save_ptr_result(&ip, None, "error", Some(&error.to_string()), now);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn resolve_watched_domains(state: &Arc<AppState>) {
+    let now = crate::store::unix_now();
+    let due = match state.store.lock() {
+        Ok(store) => store.due_watched_domains(now, 900, 10).unwrap_or_default(),
+        Err(_) => return,
+    };
+
+    for domain in due {
+        if state.is_shutting_down() {
+            break;
+        }
+
+        let mut ips = Vec::new();
+        let mut error = None;
+        match (domain.as_str(), 443).to_socket_addrs() {
+            Ok(addresses) => {
+                for address in addresses {
+                    ips.push(address.ip().to_string());
+                }
+                ips.sort();
+                ips.dedup();
+            }
+            Err(cause) => error = Some(cause.to_string()),
+        }
+
+        if let Ok(store) = state.store.lock() {
+            let _ = store.save_watched_result(&domain, &ips, error.as_deref(), now);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn is_public_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            !(address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_multicast()
+                || address.is_broadcast()
+                || address.is_unspecified())
+        }
+        IpAddr::V6(address) => {
+            !(address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.is_unique_local()
+                || address.is_unicast_link_local())
+        }
+    }
+}
+
 fn parse_lines(lines: Vec<String>) -> (Vec<(Alert, String)>, u64) {
     let mut entries = Vec::with_capacity(lines.len());
     let mut malformed = 0;
@@ -183,4 +289,19 @@ fn parse_lines(lines: Vec<String>) -> (Vec<(Alert, String)>, u64) {
     }
 
     (entries, malformed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_ip;
+
+    #[test]
+    fn filters_non_public_addresses() {
+        assert!(is_public_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_public_ip("10.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("192.168.1.1".parse().unwrap()));
+        assert!(!is_public_ip("127.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("fe80::1".parse().unwrap()));
+        assert!(!is_public_ip("fd00::1".parse().unwrap()));
+    }
 }

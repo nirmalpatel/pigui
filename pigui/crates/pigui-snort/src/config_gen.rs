@@ -34,7 +34,7 @@ extractor =
     formatting = 'json',
     connector = 'pigui_events',
     time = 'unix',
-    default_filter = 'skip',
+    default_filter = 'pick',
     protocols =
     {
         { service = 'conn', on_events = 'eof',
@@ -150,11 +150,19 @@ fn fnv1a(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::fnv1a;
+    use super::{OVERRIDES, fnv1a};
 
     #[test]
     fn hash_is_stable() {
         assert_eq!(fnv1a(b"hello"), fnv1a(b"hello"));
         assert_ne!(fnv1a(b"hello"), fnv1a(b"world"));
+    }
+
+    #[test]
+    fn overrides_enable_extractor_records_and_dns_responses() {
+        assert!(OVERRIDES.contains("default_filter = 'pick'"));
+        assert!(OVERRIDES.contains("dns = { publish_response = true }"));
+        assert!(OVERRIDES.contains("service = 'dns'"));
+        assert!(OVERRIDES.contains("connector = 'pigui_events'"));
     }
 }

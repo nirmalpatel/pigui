@@ -17,6 +17,7 @@ pub struct AppState {
     pub alerts_ingested: AtomicU64,
     pub parse_errors: AtomicU64,
     pub extractor_ingested: AtomicU64,
+    pub extractor_last_ingest: AtomicU64,
     pub last_snapshot_ts: AtomicU64,
     collector_error: Mutex<Option<String>>,
     shutting_down: AtomicBool,
@@ -33,6 +34,7 @@ impl AppState {
             alerts_ingested: AtomicU64::new(0),
             parse_errors: AtomicU64::new(0),
             extractor_ingested: AtomicU64::new(0),
+            extractor_last_ingest: AtomicU64::new(0),
             last_snapshot_ts: AtomicU64::new(0),
             collector_error: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
@@ -51,10 +53,17 @@ impl AppState {
             .fetch_add(stats.malformed, Ordering::Relaxed);
     }
 
-    pub fn record_extractor(&self, inserted: u64, errors: u64) {
+    pub fn record_extractor(&self, inserted: u64, errors: u64, now: i64) {
         self.extractor_ingested
             .fetch_add(inserted, Ordering::Relaxed);
         self.parse_errors.fetch_add(errors, Ordering::Relaxed);
+        self.extractor_last_ingest
+            .store(now.max(0) as u64, Ordering::Relaxed);
+    }
+
+    pub fn extractor_last_ingest(&self) -> Option<i64> {
+        let value = self.extractor_last_ingest.load(Ordering::Relaxed);
+        (value > 0).then_some(value as i64)
     }
 
     pub fn record_snapshot(&self, now: i64) {
