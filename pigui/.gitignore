@@ -1,0 +1,11 @@
+target/
+node_modules/
+dist/
+.venv/
+.env
+.env.local
+var/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
