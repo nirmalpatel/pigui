@@ -10,13 +10,14 @@ domains.
 |---|---|---|---|
 | `PIGUI.app` | User | Presentation, search, drill-down, confirmations | Implemented |
 | `pigui-daemon` | Unprivileged | Ingestion, storage, policy, local API | Implemented |
-| `pigui-helper` | Root | Firewall operations and privileged service actions | Planned; stub |
+| `pigui-helper` | Root | Capture lifecycle, staged Snort payload, audit, dry-run firewall actions | Partial: SMAppService/XPC helper implemented |
 | Snort 3 | Root | Packet inspection, alerts, flow/domain telemetry | Implemented |
 | OS collectors | Daemon thread | Process/socket attribution | Partial: macOS only |
 
 The GUI never calls `pfctl`, Snort, or the helper directly. The daemon owns
-normalization and policy. The helper will own privileged actions. The daemon
-itself is unprivileged; `sudo` is used only to launch Snort and to stop it.
+normalization and policy. The helper owns privileged actions. The daemon itself
+is unprivileged. Development scripts use `sudo` to launch Snort; the packaged
+app uses SMAppService and XPC instead and never asks PIGUI for a password.
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -47,12 +48,12 @@ itself is unprivileged; `sudo` is used only to launch Snort and to stop it.
 
 | Crate or app | Responsibility |
 |---|---|
-| `pigui-core` | Shared models, configuration, path resolution, RPC types, domain normalization, GUI settings types, blocking Unix socket client |
+| `pigui-core` | Shared models, configuration, bundle/release paths, RPC types, domain normalization, GUI settings types, Unix socket client, helper and service bridges |
 | `pigui-snort` | Snort discovery, capability probe, config generation, process status, file tailer |
 | `pigui-collector` | Collector trait, macOS `nettop` collector and parser, `ps` metadata enrichment |
 | `pigui-firewall` | Firewall traits and block request/outcome types; dry-run backend; PF placeholder |
 | `pigui-daemon` | Ingestion, correlation, SQLite store, RPC server, background tasks |
-| `pigui-helper` | Minimal privileged helper; currently a stub |
+| `pigui-helper` | Placeholder crate; the packaged helper is Swift under `packaging/macos/helper` |
 | `pigui-cli` | Headless management, diagnostics, direct fixture ingestion |
 | `pigui-gui` | Tauri Rust commands and Svelte frontend |
 
@@ -90,6 +91,9 @@ pigui/
 │   ├── pigui-helper/
 │   └── pigui-cli/
 ├── docs/
+├── packaging/
+│   └── macos/                  # app bundle, Snort bundling, helper, signing
+│       └── releases/           # signed release records and checksums
 ├── scripts/
 │   ├── check-telemetry.sh
 │   ├── dev-env.sh
@@ -105,9 +109,9 @@ pigui/
 └── var/                         # runtime state, ignored by git
 ```
 
-Planned additions (not present yet): `packaging/macos`, `packaging/linux`,
-`packaging/windows`, a rule bundle directory, and a checked-in Snort build
-script. Do not document or reference these as existing.
+`packaging/macos` now exists and builds `PIGUI.app`, bundles Snort and its
+dylibs, and installs the helper and daemon plists. Linux/Windows packaging, a
+rule bundle directory, and a checked-in Snort build script are still planned.
 
 ## Runtime paths
 
@@ -127,18 +131,19 @@ var/log/snort/                     # live alert/extractor/pid/log output
 var/log/snort/file_connector_pigui_transmit
 ```
 
-Proposed macOS production paths (planned, not used during development):
+macOS production paths:
 
 ```text
 /Applications/PIGUI.app
-/Library/PrivilegedHelperTools/com.pigui.helper
-/Library/LaunchDaemons/com.pigui.snort.plist
-/Library/LaunchDaemons/com.pigui.daemon.plist
-/Library/LaunchDaemons/com.pigui.helper.plist
-/Library/Application Support/PIGUI/
-/Library/Logs/PIGUI/
-/var/run/pigui/
+PIGUI.app/Contents/Library/LaunchAgents/com.pigui.daemon.plist
+PIGUI.app/Contents/Library/LaunchDaemons/com.pigui.helper.plist
+~/Library/Application Support/PIGUI/
+/Library/Application Support/PIGUI/payload/<payload-id>/
+/Library/Logs/PIGUI/audit.log
 ```
+
+The helper and daemon are registered with `SMAppService`; no privileged helper
+is installed under `/Library/PrivilegedHelperTools`.
 
 Development must not write into the parent Snort source tree.
 

@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
@@ -10,6 +13,8 @@ use pigui_core::rpc::{
     METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_STATUS,
     METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
 };
+use pigui_core::helper;
+use pigui_core::service::{self, ServiceAction};
 use pigui_core::settings::{AppSettings, ThemeMode};
 use serde_json::{Value, json};
 use tauri::Manager;
@@ -28,6 +33,74 @@ fn prepare_home() {
             }
         }
     }
+}
+
+fn daemon_binary() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let path = exe
+        .parent()
+        .ok_or_else(|| "PIGUI has no parent directory".to_string())?
+        .join("pigui-daemon");
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "packaged daemon not found at {}; start it from the PIGUI app bundle",
+            path.display()
+        ))
+    }
+}
+
+fn start_daemon_if_needed() -> Result<String, String> {
+    let config = Config::load().map_err(|error| error.to_string())?;
+    if config.socket_path.exists() {
+        #[cfg(unix)]
+        let connected = std::os::unix::net::UnixStream::connect(&config.socket_path).is_ok();
+        #[cfg(not(unix))]
+        let connected = true;
+        if connected {
+            return Ok("daemon is already running".to_string());
+        }
+        let _ = std::fs::remove_file(&config.socket_path);
+    }
+
+    let daemon = daemon_binary()?;
+    std::fs::create_dir_all(&config.log_dir).map_err(|error| error.to_string())?;
+    let log_path = config.log_dir.join("daemon.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|error| error.to_string())?;
+    let log_err = log.try_clone().map_err(|error| error.to_string())?;
+
+    let mut command = Command::new(&daemon);
+    command
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(log_err)
+        .env("PIGUI_HOME", &config.home);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("could not start {}: {error}", daemon.display()))?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if config.socket_path.exists() {
+            return Ok(format!("started pigui-daemon pid {}", child.id()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!(
+        "pigui-daemon started but did not create {}; see {}",
+        config.socket_path.display(),
+        log_path.display()
+    ))
 }
 
 fn client() -> Result<DaemonClient, String> {
@@ -54,6 +127,64 @@ fn update_settings(
 ) -> Result<AppSettings, String> {
     store.set_theme(theme)?;
     store.get_settings()
+}
+
+#[tauri::command]
+fn start_daemon() -> Result<String, String> {
+    start_daemon_if_needed()
+}
+
+#[tauri::command]
+fn open_login_items_settings() -> Result<(), String> {
+    let status = Command::new("/usr/bin/open")
+        .arg("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("could not open Login Items & Extensions settings".to_string())
+    }
+}
+
+#[tauri::command]
+fn service_status() -> Result<String, String> {
+    service::run(ServiceAction::Status).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn service_register_agent() -> Result<String, String> {
+    service::run(ServiceAction::RegisterAgent).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn service_unregister_agent() -> Result<String, String> {
+    service::run(ServiceAction::UnregisterAgent).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn service_register_helper() -> Result<String, String> {
+    service::run(ServiceAction::RegisterHelper).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn service_unregister_helper() -> Result<String, String> {
+    service::run(ServiceAction::UnregisterHelper).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn helper_status() -> Result<Value, String> {
+    helper::status().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn helper_enable_capture(interface: String) -> Result<Value, String> {
+    helper::enable_capture(&interface).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn helper_disable_capture() -> Result<Value, String> {
+    helper::disable_capture().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -182,12 +313,25 @@ fn main() {
 
     tauri::Builder::default()
         .setup(|app| {
+            if let Err(error) = start_daemon_if_needed() {
+                eprintln!("could not start pigui-daemon: {error}");
+            }
             let path = settings_db_path(app)?;
             let store = UiSettingsStore::open(&path).map_err(std::io::Error::other)?;
             app.manage(store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            start_daemon,
+            open_login_items_settings,
+            service_status,
+            service_register_agent,
+            service_unregister_agent,
+            service_register_helper,
+            service_unregister_helper,
+            helper_status,
+            helper_enable_capture,
+            helper_disable_capture,
             get_status,
             get_settings,
             update_settings,

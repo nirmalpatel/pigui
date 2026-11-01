@@ -2,13 +2,14 @@
 
 PIGUI is a macOS-first network security application built alongside Snort 3.
 It consumes Snort as an external passive sensor and adds OS process
-attribution, a local manager daemon, a privileged firewall helper (planned),
-and an Activity Monitor-style GUI.
+attribution, a local manager daemon, a narrow privileged helper, and an
+Activity Monitor-style GUI.
 
 Status: early implementation. Fixture ingestion, live alert/extractor
-ingestion, nettop process attribution, the daemon RPC API, the CLI, and the
-Tauri shell exist. PF enforcement, rule bundles, the helper, and release
-packaging are planned.
+ingestion, nettop process attribution, the daemon RPC API, the CLI, the Tauri
+shell, macOS app packaging, a minimal SMAppService/XPC helper, and a
+signed/notarized DMG workflow exist. PF enforcement and rule bundles are still
+planned.
 
 PIGUI lives inside the Snort 3 repository on the `pigui` branch, but it is not
 part of the Snort core build. PIGUI does not link against Snort C++ internals
@@ -42,8 +43,22 @@ cp .env.example .env        # optional; scripts fall back to .env.example
 ./scripts/run-dev.sh        # fixture daemon, then the Tauri window
 ```
 
-For live capture see [docs/01-quickstart.md](docs/01-quickstart.md). Snort must
-run with `sudo` for BPF access; the daemon does not run as root.
+Package the macOS app (unsigned by default):
+
+```bash
+./packaging/macos/build-app.sh
+```
+
+See [packaging/macos/README.md](packaging/macos/README.md) for signing,
+notarization, and the SMAppService helper model. Release records live in
+`packaging/macos/releases/`; the current record is
+[0.1.0](packaging/macos/releases/0.1.0.md).
+
+For live capture see [docs/01-quickstart.md](docs/01-quickstart.md). The
+development scripts use `sudo` to launch Snort for BPF access. The packaged app
+does not use `sudo`: the root helper is registered through SMAppService and
+writes a root-owned staged Snort payload before capture starts. The daemon does
+not run as root.
 
 ## Platform
 

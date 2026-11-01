@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
+use pigui_core::helper;
 use pigui_core::paths::resolve_snort;
 use pigui_core::rpc::{
     AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, DomainList, FlowList,
@@ -11,6 +12,7 @@ use pigui_core::rpc::{
     METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD,
     METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, ProcessList, StatusPayload, TlsList, WatchedList,
 };
+use pigui_core::service::{self, ServiceAction};
 use pigui_daemon::ingest;
 use pigui_daemon::store::Store;
 use serde_json::json;
@@ -123,6 +125,16 @@ enum Command {
         #[command(subcommand)]
         command: SnortCommand,
     },
+    /// Register or inspect macOS background services.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+    /// Call the packaged privileged helper over XPC.
+    Helper {
+        #[command(subcommand)]
+        command: HelperCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -135,6 +147,56 @@ enum SnortCommand {
     Status {
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Show SMAppService registration status.
+    Status,
+    /// Register the unprivileged user daemon.
+    RegisterAgent,
+    /// Unregister the unprivileged user daemon.
+    UnregisterAgent,
+    /// Register the root helper. macOS requires administrator approval.
+    RegisterHelper,
+    /// Unregister the root helper.
+    UnregisterHelper,
+}
+
+impl ServiceCommand {
+    fn action(&self) -> ServiceAction {
+        match self {
+            Self::Status => ServiceAction::Status,
+            Self::RegisterAgent => ServiceAction::RegisterAgent,
+            Self::UnregisterAgent => ServiceAction::UnregisterAgent,
+            Self::RegisterHelper => ServiceAction::RegisterHelper,
+            Self::UnregisterHelper => ServiceAction::UnregisterHelper,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum HelperCommand {
+    /// Show helper version, root state, and capture status.
+    Status,
+    /// Show the helper protocol version.
+    Version,
+    /// Start Snort capture through the root helper.
+    EnableCapture { interface: String },
+    /// Stop Snort capture.
+    DisableCapture,
+    /// Flush dry-run firewall state.
+    FlushFirewall,
+    /// Request a dry-run firewall block.
+    ApplyBlock {
+        ip: String,
+        #[arg(long, default_value = "both")]
+        direction: String,
+        #[arg(long, default_value_t = 0)]
+        ttl: u64,
+        #[arg(long, default_value = "operator request")]
+        reason: String,
     },
 }
 
@@ -359,6 +421,25 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Command::Service { command } => {
+            print!("{}", service::run(command.action())?);
+        }
+        Command::Helper { command } => {
+            let result = match command {
+                HelperCommand::Status => helper::status()?,
+                HelperCommand::Version => helper::version()?,
+                HelperCommand::EnableCapture { interface } => helper::enable_capture(&interface)?,
+                HelperCommand::DisableCapture => helper::disable_capture()?,
+                HelperCommand::FlushFirewall => helper::flush_firewall()?,
+                HelperCommand::ApplyBlock {
+                    ip,
+                    direction,
+                    ttl,
+                    reason,
+                } => helper::apply_block(&ip, &direction, ttl, &reason)?,
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
     }
 
     Ok(())

@@ -36,12 +36,12 @@ compatible with upstream Snort changes.
 | `pigui-daemon` | Unprivileged | Ingestion, correlation, SQLite, policy, local RPC | Implemented |
 | Snort 3 | Root | Passive packet inspection and telemetry | Implemented |
 | OS collectors | Daemon thread | Process/socket attribution via `nettop` and `ps` | Partial: macOS only |
-| `pigui-helper` | Root | Narrow privileged firewall/service actions | Planned; stub |
+| `pigui-helper` | Root | Narrow capture lifecycle and dry-run firewall actions | Partial: SMAppService/XPC helper implemented |
 | `pigui-cli` | User | Headless management and diagnostics | Implemented |
 | `pigui-firewall` | Library | Firewall backend trait and dry-run/PF placeholders | Partial |
 
 The GUI never calls `pfctl` or Snort's control socket directly. The daemon owns
-normalization and policy. The planned helper owns privileged actions.
+normalization and policy. The packaged helper owns privileged actions.
 
 See [02-architecture.md](02-architecture.md) for the full component diagram and
 crate boundaries.
@@ -70,13 +70,17 @@ Implemented today:
 - `nettop` process/socket snapshots and 5-tuple joins.
 - Destination/domain observations, trust state, PTR, and watched domains.
 - Daemon Unix-socket RPC, CLI, and Tauri GUI tabs.
+- Self-contained macOS app packaging with bundled Snort and dylibs.
+- SMAppService/XPC helper, root-owned Snort payload staging, capture UI, and
+  signed/notarized DMG workflow.
 
 Not implemented today:
 
 - Snort control-socket commands (build support exists; PIGUI client does not).
 - Rule bundle management and policy evaluation.
-- PF enforcement and the privileged helper.
-- Retention/rotation jobs, audit log, sensor stats, launchd packaging.
+- PF enforcement.
+- Retention/rotation jobs and sensor stats.
+- `/Applications` helper registration/approval verification.
 - Linux and Windows adapters.
 
 See [09-roadmap.md](09-roadmap.md) for milestone status.

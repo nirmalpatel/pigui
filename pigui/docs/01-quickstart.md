@@ -3,6 +3,10 @@
 This covers the current development workflow. It does not install Snort
 system-wide. PIGUI uses the in-tree Snort build by default.
 
+For the signed macOS app, use the **Capture** tab to register and approve the
+SMAppService helper, then enable capture. The packaged app does not use `sudo`.
+See [`packaging/macos/README.md`](../packaging/macos/README.md).
+
 ## Prerequisites
 
 - macOS (current verified platform)

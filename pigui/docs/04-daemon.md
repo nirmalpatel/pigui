@@ -8,12 +8,15 @@ normalization, SQLite storage, background collection, and the local RPC API.
 The daemon does **not** run as root. It does not need root for its current
 duties:
 
-- Snort is launched with `sudo` by `scripts/snort-live.sh` so it can open BPF.
-  The script asks Snort to drop to the current user with `-u`/`-g` after
-  capture starts, with a root retry if that fails.
+- During development, Snort is launched with `sudo` by
+  `scripts/snort-live.sh` so it can open BPF. The script asks Snort to drop to
+  the current user with `-u`/`-g` after capture starts.
+- In the packaged app, the root helper is registered with `SMAppService` and
+  starts Snort from a root-owned staged payload. The helper drops Snort to the
+  console user; the app never invokes `sudo`.
 - The daemon reads Snort output files and polls `nettop` as the current user.
-- The future `pigui-helper` will be the root-owned component for firewall and
-  privileged service actions.
+- The packaged `pigui-helper` is the root-owned component for capture lifecycle
+  and dry-run firewall actions.
 
 Do not install or launch the daemon as a root LaunchDaemon without revisiting
 this model. Running the daemon unprivileged keeps the highest-risk ingestion and
@@ -24,6 +27,11 @@ RPC surface out of the root domain.
 ```bash
 ./target/debug/pigui-daemon [OPTIONS]
 ```
+
+When launched from the packaged `PIGUI.app`, the GUI starts the bundled daemon
+automatically if the Unix socket is missing. Development runs still start the
+daemon explicitly through the scripts. Daemon output is written to
+`~/Library/Application Support/PIGUI/var/log/daemon.log` in packaged mode.
 
 | Flag | Purpose |
 |---|---|
@@ -138,6 +146,5 @@ Tracing output goes to stdout with ANSI disabled when not a terminal. Set
 - No control-socket client; Snort is managed by process/PID file.
 - No signal-based reload or stats dump.
 - No policy engine or rule bundle manager.
-- No helper RPC.
+- PF execution and capture-state persistence across helper restarts are pending.
 - No retention or log rotation job.
-- No launchd service packaging.

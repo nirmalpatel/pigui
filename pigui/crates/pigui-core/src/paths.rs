@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bundle;
 use crate::config::Config;
 use crate::error::{Error, Result};
 
@@ -10,6 +11,7 @@ use crate::error::{Error, Result};
 #[serde(rename_all = "snake_case")]
 pub enum SnortSource {
     Env,
+    Bundle,
     InTree,
     Installed,
     SystemPath,
@@ -21,6 +23,7 @@ impl SnortSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Env => "PIGUI_SNORT_BIN",
+            Self::Bundle => "app bundle",
             Self::InTree => "in-tree build",
             Self::Installed => "install prefix",
             Self::SystemPath => "/usr/local/snort",
@@ -49,6 +52,10 @@ pub fn resolve_snort(config: &Config) -> Result<ResolvedSnort> {
 
     if let Some(bin) = &config.snort_bin {
         candidates.push((config.resolve(bin), SnortSource::Env));
+    }
+
+    if let Some(bin) = bundle::snort_binary() {
+        candidates.push((bin, SnortSource::Bundle));
     }
 
     candidates.push((config.home.join("../build/src/snort"), SnortSource::InTree));

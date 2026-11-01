@@ -1,6 +1,5 @@
 fn main() {
     println!(
-        "pigui-helper {}: privileged actions are not implemented in phase 1",
-        env!("CARGO_PKG_VERSION")
+        "pigui-helper is built from packaging/macos/helper/PiguiHelper.swift for the packaged app"
     );
 }

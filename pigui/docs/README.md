@@ -2,13 +2,14 @@
 
 PIGUI is a macOS-first network security application built alongside Snort 3.
 It consumes Snort as an external passive sensor and adds OS process
-attribution, a manager daemon, a privileged firewall helper (planned), and an
+attribution, a manager daemon, a narrow privileged helper, and an
 Activity Monitor-style GUI.
 
 - Status: early implementation. Fixture ingestion, live alert/extractor
-  ingestion, nettop process attribution, the daemon RPC API, the CLI, and the
-  Tauri shell exist. PF enforcement, rule bundles, the helper, and release
-  packaging are planned.
+  ingestion, nettop process attribution, the daemon RPC API, the CLI, the Tauri
+  shell, macOS app packaging, a narrow SMAppService/XPC helper, and a
+  signed/notarized DMG workflow exist. PF enforcement and rule bundles are
+  planned.
 - Target platform: macOS first. Linux and Windows are later adapters.
 - Project directory: `pigui/`
 - Parent Snort tree: not modified by PIGUI and not part of PIGUI's build.

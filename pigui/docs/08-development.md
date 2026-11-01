@@ -30,6 +30,74 @@ The Tauri app looks up `PIGUI_HOME` when set. In debug builds it defaults to the
 repository `pigui/` directory. In release it uses the Tauri app-data directory
 for GUI settings.
 
+## macOS packaging
+
+From `pigui/`:
+
+```bash
+./packaging/macos/build-app.sh
+./packaging/macos/verify-bundle.sh target/macos/PIGUI.app
+```
+
+The unsigned build is written to `target/macos/PIGUI.app`. Set
+`PIGUI_SIGN_IDENTITY`, `PIGUI_TEAM_ID`, `PIGUI_NOTARY_PROFILE`, and
+`PIGUI_NOTARIZE=1` for a signed and notarized DMG. See
+[`packaging/macos/README.md`](../packaging/macos/README.md).
+
+The packaged app includes `pigui-servicectl`, used by `pigui-cli service` and
+the GUI to register services through `SMAppService`:
+
+```bash
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli service status
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli service register-agent
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli service register-helper
+```
+
+`register-helper` requires a signed app and administrator approval in System
+Settings. It never asks PIGUI for a password.
+
+The helper XPC bridge is available for diagnostics once the helper is running:
+
+```bash
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper status
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper apply-block 198.51.100.10 --ttl 60
+```
+
+The helper accepts only fixed methods. `apply_block` and `flush_firewall` are
+dry-run until PF execution is implemented.
+
+## Signed macOS release
+
+Verify signing credentials first:
+
+```bash
+./packaging/macos/check-signing.sh
+```
+
+Both the Developer ID Application certificate and the `notarytool` keychain
+profile must report OK. Then build:
+
+```bash
+PIGUI_SIGN_IDENTITY="Developer ID Application: Example Corp (ABCDE12345)" \
+PIGUI_TEAM_ID="ABCDE12345" \
+PIGUI_NOTARY_PROFILE="pigui-notary" \
+PIGUI_NOTARIZE=1 \
+./packaging/macos/build-app.sh
+```
+
+The script signs every nested binary, notarizes and staples the app bundle,
+creates the DMG, then notarizes and staples the DMG. The app-level ticket is
+required for the `SMAppService` LaunchDaemon. Record the DMG SHA-256,
+submission IDs, and build environment in
+`packaging/macos/releases/<version>.md`.
+
+A notarization ticket applies only to the exact DMG that was submitted. Any
+rebuild requires a new submission. Do not rebuild a release DMG after
+notarization; bump the version instead.
+
+`stapler staple` can fail with a transient CloudKit/network error. Retry the
+staple operation; do not rebuild unless the artifact actually changed.
+
 ## Scripts
 
 | Script | Purpose |
@@ -162,12 +230,24 @@ file metadata/process checks. Do not assume the Unix code compiles there.
 - Confirm the configured interface is active.
 - Process attribution for other users may be limited by privileges.
 
+### Helper registration or login-item approval is stale
+
+Use the Capture tab or the packaged `pigui-servicectl` to unregister and
+re-register the service. Do not use `sfltool resetbtm` to remove one PIGUI
+item; it resets all background-item approvals for every app.
+
 ### UI cannot reach the daemon
 
+- In a packaged build, click **Start daemon** in the error banner. The GUI starts
+  the bundled daemon automatically when the socket is missing.
+- Check `~/Library/Application Support/PIGUI/var/log/daemon.log` for packaged
+  runs.
+- In development, start it with `./target/debug/pigui-daemon` or
+  `scripts/run-live.sh`.
 - Confirm the daemon is running and the socket exists.
 - Confirm the GUI and daemon use the same `PIGUI_HOME`.
-- In release builds, `PIGUI_HOME` is not defaulted; set it explicitly or use
-  the packaged paths.
+- Packaged builds default to `~/Library/Application Support/PIGUI`; do not
+  set `PIGUI_HOME` unless you intentionally want development paths.
 
 ### Database is locked
 

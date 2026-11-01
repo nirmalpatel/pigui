@@ -1,6 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use crate::bundle;
 use crate::error::{Error, Result};
 
 /// Runtime configuration for PIGUI.
@@ -30,10 +31,14 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self> {
-        let _ = dotenvy::dotenv();
+        let bundled = bundle::is_bundled();
+        if !bundled {
+            let _ = dotenvy::dotenv();
+        }
 
         let raw_home = env::var_os("PIGUI_HOME")
             .map(PathBuf::from)
+            .or_else(|| bundled.then(bundle::production_home).flatten())
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let home = if raw_home.is_absolute() {
             raw_home
@@ -43,7 +48,9 @@ impl Config {
                 .unwrap_or(raw_home)
         };
         let home = home.canonicalize().unwrap_or(home);
-        let _ = dotenvy::from_path(home.join(".env"));
+        if !bundled {
+            let _ = dotenvy::from_path(home.join(".env"));
+        }
 
         let run_dir = absolute(&home, path_var("PIGUI_RUN_DIR", home.join("var/run")));
         let log_dir = absolute(&home, path_var("PIGUI_LOG_DIR", home.join("var/log")));
@@ -51,21 +58,25 @@ impl Config {
         let snort_bin = optional_path_var("PIGUI_SNORT_BIN").map(|path| absolute(&home, path));
         let snort_config = optional_path_var("PIGUI_SNORT_CONFIG")
             .map(|path| absolute(&home, path))
+            .or_else(bundle::snort_config)
             .or_else(|| {
                 let candidate = home.join("../lua/snort.lua");
                 candidate.is_file().then_some(candidate)
             });
         let snort_lua_path = optional_path_var("PIGUI_SNORT_LUA_PATH")
             .map(|path| absolute(&home, path))
+            .or_else(bundle::snort_lua_dir)
             .or_else(|| {
                 let candidate = home.join("../lua");
                 candidate.is_dir().then_some(candidate)
             });
 
-        let db_path = absolute(
-            &home,
-            path_var("PIGUI_DB_PATH", home.join("var/lib/pigui.db")),
-        );
+        let default_db = if bundled {
+            home.join("var/lib/pigui-live.db")
+        } else {
+            home.join("var/lib/pigui.db")
+        };
+        let db_path = absolute(&home, path_var("PIGUI_DB_PATH", default_db));
         let alert_json = absolute(
             &home,
             path_var("PIGUI_ALERT_JSON", log_dir.join("alert_json.txt")),
@@ -75,13 +86,24 @@ impl Config {
             path_var("PIGUI_SOCKET", run_dir.join("pigui-daemon.sock")),
         );
 
-        let mode = env::var("PIGUI_MODE").unwrap_or_else(|_| "fixture".to_string());
+        let mode = env::var("PIGUI_MODE").unwrap_or_else(|_| {
+            if bundled {
+                "live".to_string()
+            } else {
+                "fixture".to_string()
+            }
+        });
         let snort_interface = env::var("PIGUI_SNORT_INTERFACE")
             .ok()
             .filter(|value| !value.is_empty());
+        let default_snort_log_dir = if bundled {
+            home.join("snort")
+        } else {
+            log_dir.join("snort")
+        };
         let snort_log_dir = absolute(
             &home,
-            path_var("PIGUI_SNORT_LOG_DIR", log_dir.join("snort")),
+            path_var("PIGUI_SNORT_LOG_DIR", default_snort_log_dir),
         );
         // In live mode the alert file is written by Snort into its log dir.
         let alert_json = if mode == "live" && env::var_os("PIGUI_ALERT_JSON").is_none() {

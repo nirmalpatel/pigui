@@ -289,6 +289,12 @@
   let lastUpdated = $state("");
   let filter = $state("");
   let themeMode = $state<ThemeMode>(cachedTheme());
+  let serviceStatus = $state("");
+  let serviceBusy = $state(false);
+  let captureInterface = $state("");
+  let helperOutput = $state("");
+  let helperBusy = $state(false);
+  let startingDaemon = $state(false);
   let systemDark = $state(
     typeof window !== "undefined" &&
       window.matchMedia("(prefers-color-scheme: dark)").matches,
@@ -635,6 +641,121 @@
     }
   }
 
+  type ServiceField = "agent" | "helper" | "bundle";
+
+  function serviceField(raw: string, field: ServiceField): string {
+    try {
+      const value = JSON.parse(raw) as Record<string, unknown>;
+      return typeof value[field] === "string" ? (value[field] as string) : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  function formatServiceStatus(raw: string): string {
+    if (!raw) {
+      return "not checked";
+    }
+    try {
+      const value = JSON.parse(raw) as {
+        agent?: string;
+        helper?: string;
+        bundle?: string;
+      };
+      return [
+        `daemon: ${value.agent ?? "unknown"}`,
+        `helper: ${value.helper ?? "unknown"}`,
+        `bundle: ${value.bundle ?? "unknown"}`,
+      ].join("\n");
+    } catch {
+      return raw;
+    }
+  }
+
+  async function refreshServices() {
+    try {
+      serviceStatus = await invoke<string>("service_status");
+    } catch (cause) {
+      serviceStatus = String(cause);
+    }
+  }
+
+  async function runServiceCommand(command: string) {
+    serviceBusy = true;
+    try {
+      serviceStatus = await invoke<string>(command);
+    } catch (cause) {
+      serviceStatus = String(cause);
+    } finally {
+      serviceBusy = false;
+    }
+  }
+
+  async function openLoginItemsSettings() {
+    try {
+      await invoke("open_login_items_settings");
+    } catch (cause) {
+      serviceStatus = String(cause);
+    }
+  }
+
+  async function startDaemon() {
+    startingDaemon = true;
+    try {
+      await invoke<string>("start_daemon");
+      await refresh();
+    } catch (cause) {
+      error = String(cause);
+    } finally {
+      startingDaemon = false;
+    }
+  }
+
+  async function refreshHelper() {
+    helperBusy = true;
+    try {
+      helperOutput = JSON.stringify(await invoke<unknown>("helper_status"), null, 2);
+    } catch (cause) {
+      helperOutput = String(cause);
+    } finally {
+      helperBusy = false;
+    }
+  }
+
+  async function enableCapture() {
+    helperBusy = true;
+    try {
+      const interfaceName =
+        captureInterface.trim() || status?.snort_interface || "en0";
+      helperOutput = JSON.stringify(
+        await invoke<unknown>("helper_enable_capture", { interface: interfaceName }),
+        null,
+        2,
+      );
+      await refresh();
+    } catch (cause) {
+      helperOutput = String(cause);
+    } finally {
+      helperBusy = false;
+    }
+  }
+
+  async function disableCapture() {
+    helperBusy = true;
+    try {
+      helperOutput = JSON.stringify(
+        await invoke<unknown>("helper_disable_capture"),
+        null,
+        2,
+      );
+      await refresh();
+    } catch (cause) {
+      helperOutput = String(cause);
+    } finally {
+      helperBusy = false;
+    }
+  }
+
   async function selectTheme(mode: ThemeMode) {
     themeMode = mode;
     try {
@@ -656,6 +777,7 @@
     };
     media.addEventListener("change", handleScheme);
     void loadSettings();
+    void refreshServices();
     void refresh();
     const timer = setInterval(() => void refresh(), 2000);
     return () => {
@@ -713,7 +835,14 @@
     <section class="banner error">
       <strong>Daemon unreachable.</strong>
       {error}
-      <p>Start the daemon with <code>scripts/run-live.sh</code> or <code>cargo run -p pigui-daemon</code>.</p>
+      <p>
+        The packaged app starts its bundled daemon automatically. If it did not,
+        start it now. In development, use <code>scripts/run-live.sh</code> or
+        <code>cargo run -p pigui-daemon</code>.
+      </p>
+      <button type="button" onclick={() => void startDaemon()} disabled={startingDaemon}>
+        {startingDaemon ? "Starting..." : "Start daemon"}
+      </button>
     </section>
   {:else if loading}
     <section class="banner">Connecting to pigui-daemon...</section>
@@ -773,6 +902,20 @@
     </nav>
 
     {#if tab === "overview"}
+      {#if !status.snort_running}
+        <section class="banner warning">
+          <strong>Live capture is off.</strong>
+          <p>
+            The daemon is running, but Snort is not. Register and approve the
+            privileged helper, then start capture from the Capture tab.
+          </p>
+          <div class="actions">
+            <button type="button" onclick={() => (tab = "capture")}>
+              Set up live capture
+            </button>
+          </div>
+        </section>
+      {/if}
       <section class="capabilities">
         <article>
           <span class="label">Snort</span>
@@ -1337,6 +1480,79 @@
       </section>
 
       <section class="panel">
+        <div class="panel-header">
+          <h2>Background services</h2>
+          <div class="actions">
+            <button type="button" onclick={() => void refreshServices()} disabled={serviceBusy}>
+              Check again
+            </button>
+            <button type="button" onclick={() => void openLoginItemsSettings()}>
+              Open Login Items settings
+            </button>
+            <button type="button" onclick={() => void runServiceCommand("service_register_agent")} disabled={serviceBusy}>
+              Register daemon
+            </button>
+            <button type="button" onclick={() => void runServiceCommand("service_register_helper")} disabled={serviceBusy}>
+              Register helper
+            </button>
+            <button type="button" onclick={() => void runServiceCommand("service_unregister_helper")} disabled={serviceBusy}>
+              Unregister helper
+            </button>
+          </div>
+        </div>
+        <div class="service-state">
+          <span class="pill" class:ok={serviceField(serviceStatus, "agent") === "enabled"}>
+            daemon approval: {serviceField(serviceStatus, "agent")}
+          </span>
+          <span class="pill" class:ok={serviceField(serviceStatus, "helper") === "enabled"}>
+            helper approval: {serviceField(serviceStatus, "helper")}
+          </span>
+        </div>
+        <ol class="setup-steps">
+          <li>Click <strong>Register helper</strong>.</li>
+          <li>Click <strong>Open Login Items settings</strong> and approve PIGUI.</li>
+          <li>Click <strong>Check again</strong> until the helper shows <code>enabled</code>.</li>
+          <li>Return to Capture control and click <strong>Enable capture</strong>.</li>
+        </ol>
+        <p class="hint">
+          PIGUI never asks for your password. macOS owns approval; no credential
+          is passed to or stored by PIGUI. Local unsigned builds may return
+          <code>Operation not permitted</code>: use <code>scripts/run-live.sh</code>
+          for development, or sign/notarize and install in <code>/Applications</code>.
+        </p>
+        <pre class="service-status">{formatServiceStatus(serviceStatus)}</pre>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Capture control</h2>
+          <div class="actions">
+            <input
+              type="text"
+              placeholder={status.snort_interface ?? "en0"}
+              bind:value={captureInterface}
+              aria-label="Capture interface"
+            />
+            <button type="button" onclick={() => void enableCapture()} disabled={helperBusy}>
+              Enable capture
+            </button>
+            <button type="button" onclick={() => void disableCapture()} disabled={helperBusy}>
+              Disable capture
+            </button>
+            <button type="button" onclick={() => void refreshHelper()} disabled={helperBusy}>
+              Helper status
+            </button>
+          </div>
+        </div>
+        <p class="hint">
+          Capture requires the root helper to be registered and approved. The
+          helper stages Snort into a root-owned payload and starts it; the
+          unprivileged daemon only reads the resulting telemetry.
+        </p>
+        <pre class="service-status">{helperOutput || "helper not queried"}</pre>
+      </section>
+
+      <section class="panel">
         <div class="panel-header"><h2>Runtime paths</h2></div>
         <div class="paths">
           <div><span class="label">database</span><code>{status.db_path}</code></div>
@@ -1375,12 +1591,18 @@
   h1 { margin: 0; font-size: 22px; letter-spacing: 0.3px; }
   header p { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
   .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+  .service-status { margin: 0; padding: 10px 12px; border: 1px solid var(--border); background: var(--surface-3); border-radius: 8px; white-space: pre-wrap; font-size: 12px; }
+  .service-state { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .setup-steps { margin: 0 0 10px; padding-left: 20px; color: var(--text-muted); font-size: 12.5px; }
+  .setup-steps li { margin: 3px 0; }
   .updated, .mode { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
   .updated { min-width: 9.5rem; text-align: right; font-variant-numeric: tabular-nums; }
   .mode { text-transform: uppercase; letter-spacing: 0.6px; }
   .refresh { width: 7.5rem; }
   .pill { border-radius: 999px; padding: 4px 10px; font-size: 12px; background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); white-space: nowrap; }
   .pill.degraded { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+  .service-state .pill { background: var(--surface-3); color: var(--text-muted); border-color: var(--border); }
+  .service-state .pill.ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
   .theme-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border-strong); background: var(--surface-3); border-radius: 8px; }
   .theme-switch button { border: 1px solid transparent; background: transparent; color: var(--text-muted); border-radius: 6px; padding: 4px 9px; font-size: 12px; }
   .theme-switch button:hover { background: var(--surface-hover); color: var(--text); }

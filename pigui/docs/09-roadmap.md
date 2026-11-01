@@ -13,16 +13,16 @@ what is planned.
 | M3 | Snort discovery, config generation, control adapter, log ingestion | Partial: discovery, config generation, alert/extractor ingestion complete; control adapter missing |
 | M4 | macOS process/socket collector and correlation | Partial: `nettop` collector and 5-tuple joins complete; Network Extension later |
 | M5 | Rule bundle manager and validation pipeline | Planned |
-| M6 | PF helper in dry-run mode | Planned |
+| M6 | PF helper in dry-run mode | Partial: SMAppService/XPC helper and dry-run actions implemented; PF execution pending |
 | M7 | Daemon API and GUI MVP | Partial: live processes/connections/destinations/alerts/domains/DNS API and tabs complete |
-| M8 | launchd packaging and macOS system integration | Planned |
+| M8 | launchd packaging and macOS system integration | Partial: signed/notarized/stapled app and DMG implemented; installed helper launch verification pending |
 | M9 | Hardening, retention, audit, tests, documentation | Partial: tests and docs exist; retention, audit, and hardening pending |
 | M10 | Linux/ufw/nftables and Windows research | Later |
 
 ## Implemented
 
 - Rust workspace with core, Snort adapter, collector, firewall types, daemon,
-  helper stub, CLI, and Tauri GUI.
+  CLI, and Tauri GUI, plus a packaged Swift/XPC helper.
 - Snort discovery and capability probe.
 - Generated live Snort configuration with validation.
 - Alert JSONL ingestion with dedupe.
@@ -35,18 +35,21 @@ what is planned.
 - Unix-socket daemon API.
 - CLI for headless inspection and diagnostics.
 - Tauri 2 + Svelte GUI shell.
+- Signed, notarized, stapled macOS DMG with bundled Snort and dylibs.
 
 ## Partial or missing
 
 - Snort control socket: Snort can be built with it, but PIGUI has no client and
   live scripts do not wire it.
 - Signal-based Snort management.
-- Firewall: types and a dry-run backend exist; PF is a placeholder.
-- Helper: stub only.
+- Firewall: types and a dry-run backend exist; PF execution is a placeholder.
+- Helper: XPC service, payload staging, Snort lifecycle, audit, and dry-run
+  firewall actions exist; PF execution, capture-state persistence across helper
+  restarts, and fuller GUI onboarding remain.
 - Rule bundles and policy engine.
 - Retention and log rotation.
-- Audit log, sensor stats, and firewall action history.
-- launchd packaging and production paths.
+- Sensor stats and firewall action history; helper privileged-action audit exists.
+- `/Applications` helper registration/approval verification and full production onboarding.
 - Linux and Windows adapters.
 - Windows-compatible IPC and file/process APIs.
 
@@ -89,13 +92,12 @@ Resolved:
 Still open:
 
 - Minimum macOS version. Current proposal: macOS 14+.
-- Whether the daemon and helper are separate binaries in the first milestone or
-  start as one development-only service and split before release.
 - Whether process-aware blocking is a later Network Extension effort.
 - Whether the ruleset is native Snort syntax or a custom DSL requiring a
   compiler.
 - Windows native sensor versus WSL2/container/remote Linux sensor.
-- Distribution and notarization workflow.
+- Distribution and notarization workflow. Packaging scripts exist; signing,
+  notarization, and release credentials still need to be set.
 
 ## License
 

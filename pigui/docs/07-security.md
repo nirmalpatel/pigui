@@ -1,9 +1,10 @@
 # Security model
 
-PIGUI separates presentation, ingestion, and privileged actions. The current
-implementation only has unprivileged presentation and ingestion plus a
-root-run Snort process. The helper, policy engine, and firewall enforcement are
-planned.
+PIGUI separates presentation, ingestion, and privileged actions. Presentation
+and ingestion are unprivileged. The packaged helper is a narrow root XPC service
+that stages Snort into a root-owned payload, launches it, drops Snort to the
+console user, and exposes only allowlisted capture and dry-run firewall actions.
+Policy and PF enforcement remain planned.
 
 ## Privilege model
 
@@ -12,11 +13,11 @@ planned.
 | `PIGUI.app` | User | Reads daemon state over the Unix socket |
 | `pigui-daemon` | Unprivileged | Ingests logs, polls `nettop`, stores SQLite, serves RPC |
 | Snort | Root | Passive capture through BPF; writes telemetry files |
-| `pigui-helper` | Root | Planned; currently a stub that prints a message |
+| `pigui-helper` | Root | SMAppService LaunchDaemon; XPC; staged payload; audit; dry-run firewall |
 | OS collectors | Daemon thread | Run as the daemon user; attribution is best-effort |
 
 The daemon is deliberately unprivileged. Do not describe or deploy it as a root
-service. Root is limited to Snort and, later, the narrow helper.
+service. Root is limited to Snort and the narrow helper.
 
 ## Trust boundaries
 
@@ -26,10 +27,31 @@ service. Root is limited to Snort and, later, the narrow helper.
 3. **OS collector output** → daemon. `nettop` and `ps` output is parsed into
    process and socket samples.
 4. **GUI** → daemon. The GUI is an unprivileged RPC client.
-5. **Daemon** → helper (planned). Only fixed, allowlisted privileged actions.
+5. **Daemon** → helper. Mach-service XPC only; fixed, allowlisted actions;
+   code-signature validation in both directions.
 6. **Daemon/GUI** → Snort. The GUI never talks to Snort. The daemon does not
    manage Snort either; the dev scripts start and stop it, and the daemon reads
    status from the PID file.
+
+## Password handling
+
+PIGUI never asks for, receives, logs, or stores a machine password. The app has
+no password field and no password parameter in its RPC or XPC protocols. It does
+not call `sudo`, `AuthorizationExecuteWithPrivileges`, `getpass`, or
+`readpassphrase`.
+
+Privilege is granted by the operating system:
+
+- `SMAppService` registers the user daemon and the root helper.
+- An administrator approves the LaunchDaemon in System Settings.
+- If a future installer needs authorization, Apple Installer owns the password
+  dialog.
+- The helper receives only an allowlisted action; it never receives a
+  credential.
+
+A compromised operating system or a spoofed system dialog is outside PIGUI's
+control, which is why onboarding tells users that PIGUI never asks for a
+password. Users can revoke the background item at any time in System Settings.
 
 ## Local IPC
 
@@ -48,8 +70,11 @@ Current gaps:
 - No per-method authorization.
 - No request authentication.
 
-These must be addressed before the helper is added. The planned helper should
-verify the daemon's identity and authorize only its documented action surface.
+The packaged helper verifies the XPC client code signature before accepting a
+connection. It accepts only the signed daemon (`com.pigui.daemon`) and the
+signed in-bundle diagnostic client (`com.pigui.helperctl`), both anchored to the
+app's Developer ID team. The Unix socket still needs peer credential checks or a
+move to XPC before it should be treated as a hardened boundary.
 
 ## Security requirements
 
@@ -62,16 +87,40 @@ Current:
 - The GUI cannot send arbitrary Lua or shell commands.
 - Development state stays under `pigui/var/`.
 
-Planned:
+Requirements:
 
-- Helper exposes only fixed, allowlisted operations.
-- Unix sockets use restrictive permissions and peer credential checks.
-- Windows will use named pipes with ACLs.
-- Rule changes and firewall actions are always audited.
-- Enforcement is dry-run by default.
-- Distribution builds are signed and notarized.
-- Helper installation uses the macOS service APIs, not ad-hoc privilege
-  escalation.
+- Helper exposes only fixed, allowlisted operations. Implemented.
+- Helper runs from an SMAppService LaunchDaemon and validates XPC peers by code
+  signature. Implemented.
+- Helper stages Snort, dylibs, Lua, and rules into a root-owned read-only
+  payload before execution. Implemented.
+- Unix sockets use restrictive permissions and peer credential checks. Planned.
+- Windows will use named pipes with ACLs. Planned.
+- Rule changes and firewall actions are always audited. Privileged helper
+  actions are audited now; rule changes are planned.
+- Enforcement is dry-run by default. Implemented.
+- Distribution builds are signed and notarized. Planned; packaging supports it.
+- Helper installation uses SMAppService, not ad-hoc privilege escalation.
+  Implemented.
+
+## Release trust
+
+Distribution uses a Developer ID Application signature, Hardened Runtime, and a
+notarized, stapled app bundle and DMG. Gatekeeper should report `accepted` with
+`source=Notarized Developer ID`. The app itself must be stapled, not only the
+DMG, so launchd will accept the `SMAppService` LaunchDaemon.
+
+The only Hardened Runtime exceptions are on the Snort binary:
+`com.apple.security.cs.allow-jit` and
+`com.apple.security.cs.allow-unsigned-executable-memory`, required by LuaJIT.
+They are not applied to the app, daemon, or helper. PIGUI is distributed
+outside the Mac App Store and does not use App Sandbox, because the root
+LaunchDaemon and BPF capture are incompatible with the App Store sandbox model.
+
+Notarization credentials live in the macOS Keychain. Certificates, private keys,
+and app-specific passwords are never stored in the repository. A notarization
+ticket applies only to the exact artifact that was submitted; every rebuilt
+release must be notarized again.
 
 ## Rules and policy
 
