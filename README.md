@@ -1,285 +1,47 @@
-# Snort++
-
-Snort 3 is the next generation Snort IPS (Intrusion Prevention System).
-This file will show you what Snort++ has to offer and guide you through the
-steps from download to demo.  If you are unfamiliar with Snort you should
-take a look at the Snort documentation first. We will cover the following
-topics:
-
----
-
-* [Overview](#overview)
-* [Dependencies](#dependencies)
-* [Download](#download)
-* [Build Snort](#build-snort)
-* [Run Snort](#run-snort)
-* [Fuzz Testing](#fuzz-testing)
-* [Documentation](#documentation)
-* [Squeal](#squeal)
-
-# OVERVIEW
-
-This version of Snort++ includes new features as well as all Snort 2.X
-features and bug fixes for the base version of Snort except as indicated
-below:
-
-    Project = Snort++
-    Binary = snort
-    Version = 3.0.0 (Build 250) from 2.9.11
-
-Here are some key features of Snort++:
-
-* Support multiple packet processing threads
-* Use a shared configuration and attribute table
-* Use a simple, scriptable configuration
-* Make key components pluggable
-* Autodetect services for portless configuration
-* Support sticky buffers in rules
-* Autogenerate reference documentation
-* Provide better cross platform support
-* Facilitate component testing
-* Use a shared network map
-
-Additional features on the roadmap include:
-
-* Support pipelining of packet processing
-* Support hardware offload and data plane integration
-* Support proxy mode
-* Windows support
-
-# DEPENDENCIES
-
-If you already build Snort, you may have everything you need.  If not, grab
-the latest:
-
-* CMake to build from source
-* DAQ from https://github.com/snort3/libdaq for packet IO
-* dnet from https://github.com/dugsong/libdnet.git for network utility functions
-* flex >= 2.6.0 from https://github.com/westes/flex for JavaScript syntax parser
-* g++ >= 7 or other C++17 compiler
-* hwloc from https://www.open-mpi.org/projects/hwloc/ for CPU affinity management
-* LuaJIT from http://luajit.org for configuration and scripting
-* OpenSSL from https://www.openssl.org/source/ for SHA and MD5 file signatures,
-  the protected_content rule option, and SSL service detection
-* pcap from http://www.tcpdump.org for tcpdump style logging
-* PCRE2 from http://www.pcre.org for regular expression pattern matching
-* pkgconfig from https://www.freedesktop.org/wiki/Software/pkg-config/ to locate build dependencies
-* zlib >= 1.2.12 from http://www.zlib.net for decompression
-
-Additional packages provide optional features.  Check the manual for more.
-
-# DOWNLOAD
-
-There is a source tarball available in the Downloads section on snort.org:
-
-    snort-3.0.0-a3.tar.gz
-
-You can also get the code with:
-
-    git clone https://github.com/snort3/snort3.git
-
-There are separate extras packages for cmake that provide additional
-features and demonstrate how to build plugins. The source for extras
-is in snort3_extra.git repo.
-
-# BUILD SNORT
-
-Follow these steps:
-
-1.  Set up source directory:
-
-  * If you are using a github clone:
-
-    ```shell
-    cd snort3/
-    ```
-
-  * Otherwise, do this:
-
-    ```shell
-    tar zxf snort-tarball
-    cd snort-3.0.0*
-    ```
-
-2.  Setup install path:
-
-    ```shell
-    export my_path=/path/to/snorty
-    ```
-
-3.  Compile and install:
-
-  * To build with cmake and make, run configure_cmake.sh.  It will automatically create and populate a new subdirectory named 'build'.
-
-    ```shell
-    ./configure_cmake.sh --prefix=$my_path
-    cd build
-    make -j $(nproc) install
-    ```
-
-**_Note_**:
-
-  * If you can do src/snort -V you built successfully.
-  * If you are familiar with cmake, you can run cmake/ccmake instead of configure_cmake.sh.
-  * cmake --help will list any available generators, such as Xcode.  Feel free to use one, however help with those will be provided separately.
-
-# RUN SNORT
-
-Here are some examples. If you are using Talos rules and/or configs, you
-should first set any needed variables at the top of snort.lua and
-snort_defaults.lua.
-
-* Snort++ provides lots of help from the command line, including:
-
-    ```shell
-    $my_path/bin/snort --help
-    $my_path/bin/snort --help-module suppress
-    $my_path/bin/snort --help-config | grep thread
-    ```
-
-* Examine and dump a pcap.  In the following, replace a.pcap with your
-  favorite:
-
-    ```shell
-    $my_path/bin/snort -r a.pcap
-    $my_path/bin/snort -L dump -d -e -q -r a.pcap
-    ```
-
-* Verify a config, with or w/o rules:
-
-    ```shell
-    $my_path/bin/snort -c $my_path/etc/snort/snort.lua
-    $my_path/bin/snort -c $my_path/etc/snort/snort.lua -R $my_path/etc/snort/sample.rules
-    ```
-
-* Run IDS mode.  In the following, replace pcaps/ with a path to a directory
-  with one or more *.pcap files:
-
-    ```shell
-    $my_path/bin/snort -c $my_path/etc/snort/snort.lua -R $my_path/etc/snort/sample.rules \
-        -r a.pcap -A alert_test -n 100000
-    ```
-
-* Let's suppress 1:2123.  We could edit the conf or just do this:
-
-    ```shell
-    $my_path/bin/snort -c $my_path/etc/snort/snort.lua -R $my_path/etc/snort/sample.rules \
-        -r a.pcap -A alert_test -n 100000 --lua "suppress = { { gid = 1, sid = 2123 } }"
-    ```
-
-* Go whole hog on a directory with multiple packet threads:
-
-    ```shell
-    $my_path/bin/snort -c $my_path/etc/snort/snort.lua -R $my_path/etc/snort/sample.rules \
-        --pcap-filter \*.pcap --pcap-dir pcaps/ -A alert_fast --max-packet-threads 8
-    ```
-
-Additional examples are given in doc/usage.txt.
-
-# FUZZ TESTING
-
-Snort includes libFuzzer fuzz targets for testing various components. Building
-and running fuzzers requires Clang.
-
-* Build fuzzers with AddressSanitizer:
-
-    ```shell
-    CC=clang CXX=clang++ ./configure_cmake.sh --enable-fuzz-sanitizer --enable-fuzzers \
-        --enable-address-sanitizer
-    cd build
-    make fuzz -j $(nproc)
-    ```
-
-* If you need to specify DAQ include and library paths:
-
-    ```shell
-    CC=clang CXX=clang++ ./configure_cmake.sh --enable-fuzz-sanitizer --enable-fuzzers \
-        --enable-address-sanitizer --with-daq-includes=/path/to/daq/include --with-daq-libraries=/path/to/daq/lib
-    cd build
-    make fuzz -j $(nproc)
-    ```
-
-* Run a fuzz target by providing a corpus directory.  Each target is built
-  under `build/fuzz/`:
-
-    ```shell
-    mkdir file_olefile_fuzz_corpus
-    ./fuzz/file_olefile_fuzz ./file_olefile_fuzz_corpus
-    ```
-
-* If DAQ libraries are not on the default library path, set `LD_LIBRARY_PATH`:
-
-    ```shell
-    LD_LIBRARY_PATH=/path/to/daq/lib ./fuzz/file_olefile_fuzz ./file_olefile_fuzz_corpus
-    ```
-
-* Press Ctrl+C to stop the fuzzer.  List saved corpus files with:
-
-    ```shell
-    ls ./file_olefile_fuzz_corpus
-    ```
-
-* Build with coverage instrumentation instead of AddressSanitizer to measure
-  which code paths the fuzzer exercises:
-
-    ```shell
-    CC=clang CXX=clang++ ./configure_cmake.sh --enable-fuzz-sanitizer --enable-fuzzers \
-        --enable-fuzz-coverage
-    cd build
-    make fuzz -j $(nproc)
-    ```
-
-* Run the coverage build against an existing corpus (using `-runs=0` to replay
-  without generating new inputs):
-
-    ```shell
-    LLVM_PROFILE_FILE="file_olefile_fuzz.profraw" ./fuzz/file_olefile_fuzz \
-        file_olefile_fuzz_corpus -runs=0 -detect_leaks=0
-    ```
-
-* Generate an HTML coverage report:
-
-    ```shell
-    llvm-profdata merge -sparse file_olefile_fuzz.profraw -o file_olefile_fuzz.profdata
-    llvm-cov show -format=html -instr-profile=file_olefile_fuzz.profdata \
-        ./fuzz/file_olefile_fuzz -output-dir=file_olefile_fuzz_cov_html
-    ```
-
-  Open `file_olefile_fuzz_cov_html/index.html` in a browser to view the report.
-
-# DOCUMENTATION
-
-Take a look at the manual, parts of which are generated by the code so it
-stays up to date:
-
-```shell
-$my_path/share/doc/snort/snort_manual.pdf
-$my_path/share/doc/snort/snort_manual.html
-$my_path/share/doc/snort/snort_manual/index.html
+# PIGUI
+
+PIGUI is a macOS-first network security application built alongside Snort 3. It
+runs Snort as an external passive sensor and adds OS process attribution, a
+local manager daemon, a narrow privileged firewall helper, and an
+Activity Monitor-style GUI.
+
+> This repository is a fork of [snort3/snort3](https://github.com/snort3/snort3).
+> PIGUI lives on the `pigui` branch, which is this fork's default branch. The
+> `master` branch mirrors upstream Snort 3.
+
+- Project directory: [`pigui/`](pigui/)
+- Project README: [`pigui/README.md`](pigui/README.md)
+- Architecture and design: [`pigui/docs/README.md`](pigui/docs/README.md)
+- Short summary: [`PIGUI.md`](PIGUI.md)
+
+## Status
+
+Early implementation. Fixture ingestion, live alert/extractor ingestion, nettop
+process attribution, the daemon RPC API, the CLI, the Tauri shell, macOS app
+packaging, the SMAppService/XPC helper, and a signed/notarized DMG workflow
+exist. PF enforcement and rule bundles are still planned.
+
+## Quick start
+
+```bash
+cd pigui
+cp .env.example .env        # optional; scripts fall back to .env.example
+./scripts/probe-snort.sh    # resolve Snort and print capabilities
+./scripts/run-dev.sh        # fixture daemon, then the Tauri window
 ```
 
-It does not yet have much on the how and why, but it does have all the
-currently available configuration, etc.  Some key changes to rules:
+For live capture see [`pigui/docs/01-quickstart.md`](pigui/docs/01-quickstart.md).
+Packaging and signing are documented in
+[`pigui/packaging/macos/README.md`](pigui/packaging/macos/README.md).
 
-* you must use comma separated content sub options like this:  content:"foo", nocase;
-* buffer selectors must appear before the content and remain in effect until changed
-* pcre buffer selectors were deleted
-* check the manual for more on Snort++ vs Snort
-* check the manual reference section to understand how parameters are defined, etc.
+## Relationship to Snort
 
-It also covers new features not demonstrated here:
+PIGUI consumes Snort as an external process. It does not link against Snort C++
+internals, is not part of the top-level Snort CMake build, and does not modify
+Snort C++ source. The upstream Snort 3 README remains available on the
+[`master` branch](https://github.com/nirmalpatel/pigui/blob/master/README.md)
+and at [snort3/snort3](https://github.com/snort3/snort3).
 
-* snort2lua, a tool to convert Snort 2.X conf and rules to the new form
-* a new HTTP inspector
-* a binder, for mapping configuration to traffic
-* a wizard for port-independent configuration
-* improved rule parsing - arbitrary whitespace, C style comments, #begin/#end comments
-* local and remote command line shell
+## License
 
-# SQUEAL
-`o")~`
-
-We hope you are as excited about Snort++ as we are.  Let us know what you
-think on the snort-users list.  In the meantime, we'll keep our snout to
-the grindstone.
-
+PIGUI is GPL-2.0-only, matching the Snort 3 repository it lives in.
