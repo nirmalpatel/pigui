@@ -452,7 +452,7 @@ fn client(config: &Config) -> DaemonClient {
 fn print_status(status: &StatusPayload, config: &Config) {
     let caps = &status.capabilities;
     println!("PIGUI daemon status");
-    println!("  mode:            {}", status.mode);
+    println!("  environment:     {}", status.environment);
     println!("  uptime:          {}s", status.uptime_secs);
     println!(
         "  version:         {}",

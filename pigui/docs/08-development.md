@@ -21,7 +21,7 @@ From `pigui/apps/pigui-gui/`:
 ```bash
 npm install
 npm run dev        # Vite only
-npm run tauri dev  # Tauri shell + daemon client
+npm run tauri dev  # Tauri shell only; use scripts/run-dev.sh for the full app
 npm run build      # production frontend build
 npm run check      # svelte-check
 ```
@@ -103,14 +103,15 @@ staple operation; do not rebuild unless the artifact actually changed.
 | Script | Purpose |
 |---|---|
 | `scripts/dev-env.sh` | Loads `.env` or `.env.example`, sets defaults, creates `var/` |
+| `scripts/run-dev.sh` | Starts and stops Snort + daemon + Tauri dev |
 | `scripts/probe-snort.sh` | Prints resolved Snort capabilities |
-| `scripts/run-dev.sh` | Fixture daemon + Tauri dev |
-| `scripts/run-live.sh` | Snort + live daemon + Tauri dev |
-| `scripts/snort-live.sh` | Runs Snort in the foreground with sudo |
-| `scripts/stop-live.sh` | Stops Snort and requests daemon shutdown |
 | `scripts/check-telemetry.sh` | Prints status, extractor size, DNS, and domains |
 
 ## Environment reference
+
+PIGUI has two runtime environments: `dev` when running from the source tree and
+`prod` when running inside `PIGUI.app`. The daemon detects this automatically;
+there is no mode variable.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -121,10 +122,8 @@ staple operation; do not rebuild unless the artifact actually changed.
 | `PIGUI_RUN_DIR` | `var/run` | Sockets, runtime files |
 | `PIGUI_LOG_DIR` | `var/log` | Log directory |
 | `PIGUI_DB_PATH` | `var/lib/pigui.db` | SQLite database |
-| `PIGUI_ALERT_JSON` | `var/log/alert_json.txt` | Alert file to tail |
+| `PIGUI_ALERT_JSON` | `<snort log>/alert_json.txt` | Alert file to tail |
 | `PIGUI_SOCKET` | `var/run/pigui-daemon.sock` | Daemon RPC socket |
-| `PIGUI_MODE` | `fixture` | `fixture` or `live` |
-| `PIGUI_FIXTURE_ALERT_JSON` | `tests/fixtures/alert_json/valid.jsonl` | Fixture mode input |
 | `PIGUI_SNORT_INTERFACE` | auto-detected | Capture interface |
 | `PIGUI_SNORT_LOG_DIR` | `var/log/snort` | Snort log output |
 | `PIGUI_SNORT_CONFIG_DIR` | `var/snort` | Generated Snort config |
@@ -132,7 +131,6 @@ staple operation; do not rebuild unless the artifact actually changed.
 | `PIGUI_SNORT_PIDFILE` | `<log>/snort.pid` | Snort PID file |
 | `PIGUI_SNORT_CONTROL_SOCKET` | `var/run/snort.sock` | Reserved for planned control client |
 | `PIGUI_PROCESS_POLL_MS` | `1000` | `nettop` poll interval; minimum 250 |
-| `PIGUI_LIVE_DB_PATH` | `var/lib/pigui-live.db` | Live database used by scripts |
 | `RUST_LOG` | `info` | Tracing filter |
 
 Relative paths are resolved against `PIGUI_HOME`.
@@ -158,8 +156,9 @@ cargo test -p pigui-core
 cargo test -p pigui-daemon
 ```
 
-The daemon replays alert files from the beginning and relies on the dedupe
-index, so repeat runs are safe.
+Fixtures are for tests only and are not part of `run-dev.sh`. When testing
+ingestion manually, the daemon replays alert files from the beginning and
+relies on the dedupe index, so repeat runs are safe.
 
 ## Adding a platform adapter
 
@@ -236,14 +235,32 @@ Use the Capture tab or the packaged `pigui-servicectl` to unregister and
 re-register the service. Do not use `sfltool resetbtm` to remove one PIGUI
 item; it resets all background-item approvals for every app.
 
+### Tauri build fails after moving the checkout
+
+If `tauri dev` fails in `pigui-gui` with an error such as:
+
+```text
+failed to read plugin permissions: failed to read file
+'/old/path/pigui/apps/pigui-gui/src-tauri/target/debug/build/...'
+```
+
+the Tauri build cache contains absolute paths from the old checkout location.
+Remove the GUI target cache and retry:
+
+```bash
+rm -rf apps/pigui-gui/src-tauri/target
+./scripts/run-dev.sh
+```
+
+This cache is regenerable build output and is safe to delete.
+
 ### UI cannot reach the daemon
 
 - In a packaged build, click **Start daemon** in the error banner. The GUI starts
   the bundled daemon automatically when the socket is missing.
 - Check `~/Library/Application Support/PIGUI/var/log/daemon.log` for packaged
   runs.
-- In development, start it with `./target/debug/pigui-daemon` or
-  `scripts/run-live.sh`.
+- In development, start everything with `scripts/run-dev.sh`.
 - Confirm the daemon is running and the socket exists.
 - Confirm the GUI and daemon use the same `PIGUI_HOME`.
 - Packaged builds default to `~/Library/Application Support/PIGUI`; do not

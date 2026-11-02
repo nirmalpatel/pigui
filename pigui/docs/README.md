@@ -19,7 +19,7 @@ Activity Monitor-style GUI.
 | Document | Contents |
 |---|---|
 | [00-abridged-docs.md](00-abridged-docs.md) | Core concepts, project boundaries, and links to everything else |
-| [01-quickstart.md](01-quickstart.md) | Run the fixture app, run live capture, and verify the install |
+| [01-quickstart.md](01-quickstart.md) | Start the dev app with live Snort and run diagnostics |
 | [02-architecture.md](02-architecture.md) | Components, crate boundaries, repository layout, runtime paths |
 | [03-data.md](03-data.md) | Snort and OS data sources, reconciliation, SQLite schema |
 | [04-daemon.md](04-daemon.md) | Daemon lifecycle, tasks, privilege model, storage, degraded modes |

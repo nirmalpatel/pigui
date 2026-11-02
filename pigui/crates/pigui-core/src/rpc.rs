@@ -248,7 +248,7 @@ pub struct StatusPayload {
     pub destination_count: u64,
     pub degraded: Vec<String>,
     #[serde(default)]
-    pub mode: String,
+    pub environment: String,
     #[serde(default)]
     pub snort_running: bool,
     #[serde(default)]

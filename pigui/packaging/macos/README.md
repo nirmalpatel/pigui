@@ -216,7 +216,7 @@ enclosing DMG. Otherwise launchd can reject the helper with
 `OS_REASON_CODESIGNING`.
 
 An unsigned local build cannot complete this flow. It may return
-`Operation not permitted`. For development, use `scripts/run-live.sh`, which
+`Operation not permitted`. For development, use `scripts/run-dev.sh`, which
 runs Snort with `sudo` outside the packaged helper path.
 
 Do not use `sfltool resetbtm` to clear a single app. It resets the whole

@@ -81,7 +81,7 @@ last seen.
     "daq_modules": [],
     "warnings": []
   },
-  "db_path": "/path/to/var/lib/pigui-live.db",
+  "db_path": "/path/to/var/lib/pigui.db",
   "alert_json": "/path/to/var/log/snort/alert_json.txt",
   "socket_path": "/path/to/var/run/pigui-daemon.sock",
   "uptime_secs": 42,
@@ -90,7 +90,7 @@ last seen.
   "alert_count": 120,
   "destination_count": 33,
   "degraded": [],
-  "mode": "live",
+  "environment": "dev",
   "snort_running": true,
   "snort_pid": 12345,
   "snort_interface": "en0",
@@ -112,7 +112,7 @@ last seen.
 ```
 
 `capabilities.daq_modules` is currently always empty. `degraded` is derived from
-capabilities. `extractor_idle` is live-mode only.
+capabilities. `extractor_idle` is set when alerts have arrived but extractor records have not.
 
 ### `HealthPayload`
 

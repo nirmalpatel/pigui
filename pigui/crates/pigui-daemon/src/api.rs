@@ -160,10 +160,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
     let extractor_ingested = state
         .extractor_ingested
         .load(std::sync::atomic::Ordering::Relaxed);
-    let extractor_idle = state.config.mode == "live"
-        && alerts_ingested > 0
-        && extractor_ingested == 0
-        && state.uptime_secs() > 30;
+    let extractor_idle = alerts_ingested > 0 && extractor_ingested == 0 && state.uptime_secs() > 30;
 
     Ok(StatusPayload {
         capabilities: state.capabilities.clone(),
@@ -178,7 +175,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         alert_count,
         destination_count,
         degraded: state.capabilities.degraded_reasons(),
-        mode: state.config.mode.clone(),
+        environment: state.config.environment.clone(),
         snort_running: snort.running,
         snort_pid: snort.pid,
         snort_interface: snort.interface,

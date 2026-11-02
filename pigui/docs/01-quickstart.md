@@ -1,48 +1,64 @@
 # Quick start
 
-This covers the current development workflow. It does not install Snort
-system-wide. PIGUI uses the in-tree Snort build by default.
+This covers the development workflow. PIGUI uses the in-tree Snort build by
+default; nothing is installed system-wide.
 
-For the signed macOS app, use the **Capture** tab to register and approve the
-SMAppService helper, then enable capture. The packaged app does not use `sudo`.
-See [`packaging/macos/README.md`](../packaging/macos/README.md).
-
-## Install the macOS app
-
-Download `PIGUI-<version>-macos-arm64.dmg` and `SHA256SUMS` from the
-[GitHub releases page](https://github.com/nirmalpatel/pigui/releases). Verify
-the download, open the DMG, and drag `PIGUI.app` to `Applications`:
+There is one development command:
 
 ```bash
-shasum -a 256 -c SHA256SUMS
-spctl -a -vvv -t install PIGUI-<version>-macos-arm64.dmg
+cd pigui
+./scripts/run-dev.sh
 ```
 
-Then launch PIGUI and use the **Capture** tab to register and approve the
-helper. macOS requires the app to be in `/Applications` for the
-`SMAppService` LaunchDaemon flow.
+For the packaged macOS app, see [Packaged macOS app](#packaged-macos-app) at the
+end of this document.
 
-## Prerequisites
+## Before you start
 
 - macOS (currently supported; Linux and Windows support is in progress)
 - Rust 1.85 or newer with Cargo
 - Node.js 22 and npm
 - A Snort 3 binary. The default is `../build/src/snort`, relative to `pigui/`.
-  Override with `PIGUI_SNORT_BIN`.
-- A Snort source `lua/` tree for defaults. The default is `../lua`.
+  Override with `PIGUI_SNORT_BIN`. See
+  [05-snort-compile.md](05-snort-compile.md) to build Snort.
 - `sudo` access for live BPF capture.
 
-See [05-snort-compile.md](05-snort-compile.md) to build Snort.
+## Start the dev app
 
-## Environment
+From `pigui/`:
 
 ```bash
-cd pigui
-cp .env.example .env    # optional; scripts fall back to .env.example
+./scripts/run-dev.sh
+```
+
+This starts the whole app:
+
+1. Stops any stale PIGUI/Snort process from a previous run.
+2. Requests `sudo` and selects the capture interface.
+3. Generates and validates `var/snort/snort.lua`.
+4. Starts Snort under `sudo`.
+5. Builds and starts `pigui-daemon`.
+6. Runs `npm install` and `npm run tauri dev` in `apps/pigui-gui`.
+
+Press Ctrl-C to stop Snort, the daemon, and the app together. If a previous run
+was killed and left processes behind, use the same script:
+
+```bash
+./scripts/run-dev.sh --stop
+```
+
+You do **not** need a `.env` file. The dev script uses `.env` when it exists
+and otherwise falls back to `.env.example`. Create a `.env` only when you need
+to override defaults.
+
+## Optional: customize the environment
+
+```bash
+cp .env.example .env    # only needed to override defaults
 ```
 
 Relative paths in `.env` are resolved against `PIGUI_HOME`, which defaults to
-the current working directory. The dev scripts set `PIGUI_HOME` to `pigui/`.
+the current working directory. The dev script sets `PIGUI_HOME` to `pigui/`.
 
 Check what PIGUI found:
 
@@ -54,74 +70,30 @@ This prints the resolved binary, version, shell/control-socket support,
 extractor and `alert_json` availability, DAQ modules, and configuration
 validation status.
 
-## Fixture mode
-
-Fixture mode runs the daemon against a recorded `alert_json` file and opens the
-Tauri window.
-
-```bash
-./scripts/run-dev.sh
-```
-
-The script:
-
-1. Builds `pigui-daemon`.
-2. Starts it on `tests/fixtures/alert_json/valid.jsonl`.
-3. Waits for `var/run/pigui-daemon.sock`.
-4. Runs `npm install` and `npm run tauri dev` in `apps/pigui-gui`.
-
-The daemon replays the alert file from the beginning by default. Inserts are
-deduplicated by the SQLite index, so restarts do not duplicate events. Use
-`--from-end` with `pigui-daemon` to skip existing content.
-
-### Headless fixture checks
+## Tests
 
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-
-./target/debug/pigui-cli ingest \
-  --file tests/fixtures/alert_json/valid.jsonl
-
-./target/debug/pigui-daemon \
-  --alerts-file tests/fixtures/alert_json/valid.jsonl
-
-# in another shell
-./target/debug/pigui-cli status
-./target/debug/pigui-cli alerts --limit 10
-./target/debug/pigui-cli destinations --limit 10
 ```
 
-## Live capture
+Tests use recorded fixtures under `tests/fixtures/`; they are not part of the
+app startup path.
 
-Live mode runs Snort on an interface, generates the Snort configuration, tails
-the alert and extractor files, and starts the `nettop` collector.
+## Telemetry checks
+
+While the dev app is running:
 
 ```bash
-./scripts/run-live.sh
+./scripts/check-telemetry.sh
 ```
 
-The script:
-
-1. Requests `sudo` credentials.
-2. Detects the default interface with `route` unless
-   `PIGUI_SNORT_INTERFACE` is set.
-3. Generates and validates `var/snort/snort.lua`.
-4. Starts Snort with `--create-pidfile` under `var/log/snort/`.
-5. Starts the daemon with `var/lib/pigui-live.db`.
-6. Opens the Tauri window.
-
 Snort output goes to `var/log/snort/snort.log`. The daemon log is
-`var/log/live-daemon.log`.
+`var/log/dev-daemon.log`.
 
 Useful commands:
 
 ```bash
-./scripts/snort-live.sh          # run Snort in the foreground
-./scripts/stop-live.sh           # stop Snort and the daemon
-./scripts/check-telemetry.sh     # show extractor, DNS, TLS, and domain counts
-
-./target/debug/pigui-cli snort generate-config
 ./target/debug/pigui-cli snort status
 ./target/debug/pigui-cli flows --limit 20
 ./target/debug/pigui-cli processes --limit 20
@@ -153,3 +125,21 @@ Common failures are covered in [08-development.md](08-development.md#troubleshoo
 - Snort fails to start or validate
 - `nettop` collection fails
 - UI cannot reach the daemon
+
+## Packaged macOS app
+
+Download `PIGUI-<version>-macos-arm64.dmg` and `SHA256SUMS` from the
+[GitHub releases page](https://github.com/nirmalpatel/pigui/releases). Verify
+the download, open the DMG, and drag `PIGUI.app` to `Applications`:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+spctl -a -vvv -t install PIGUI-<version>-macos-arm64.dmg
+```
+
+Then launch PIGUI and use the **Capture** tab to register and approve the
+helper. macOS requires the app to be in `/Applications` for the
+`SMAppService` LaunchDaemon flow. The packaged app does not use `sudo`.
+
+See [`packaging/macos/README.md`](../packaging/macos/README.md) for packaging,
+signing, and notarization details.

@@ -9,8 +9,8 @@ The daemon does **not** run as root. It does not need root for its current
 duties:
 
 - During development, Snort is launched with `sudo` by
-  `scripts/snort-live.sh` so it can open BPF. The script asks Snort to drop to
-  the current user with `-u`/`-g` after capture starts.
+  `scripts/run-dev.sh` so it can open BPF. The script asks Snort to drop to the
+  current user with `-u`/`-g` after capture starts.
 - In the packaged app, the root helper is registered with `SMAppService` and
   starts Snort from a root-owned staged payload. The helper drops Snort to the
   console user; the app never invokes `sudo`.
@@ -31,7 +31,7 @@ RPC surface out of the root domain.
 When launched from the packaged `PIGUI.app`, the GUI starts the bundled daemon
 automatically if the Unix socket is missing. Development runs still start the
 daemon explicitly through the scripts. Daemon output is written to
-`~/Library/Application Support/PIGUI/var/log/daemon.log` in packaged mode.
+`~/Library/Application Support/PIGUI/var/log/daemon.log` in prod.
 
 | Flag | Purpose |
 |---|---|
@@ -87,8 +87,7 @@ Path handling:
 
 Default databases:
 
-- `var/lib/pigui.db` — fixture/default mode.
-- `var/lib/pigui-live.db` — live mode.
+- `var/lib/pigui.db` — dev and prod data.
 - `var/lib/pigui-gui.db` — GUI preferences, owned by the GUI process, not the
   daemon.
 
@@ -115,7 +114,7 @@ The full method list, payloads, and CLI/GUI mapping are in
 The `status` response reports:
 
 - Snort capabilities, binary, version, and source.
-- Daemon mode, uptime, database, alert file, and socket path.
+- Environment (`dev` or `prod`), uptime, database, alert file, and socket path.
 - Counts for alerts, destinations, flows, processes, DNS, TLS, HTTP, QUIC, and
   domains.
 - Snort process status from the PID file.
@@ -130,9 +129,8 @@ Degraded reasons are derived from Snort capabilities:
 - No `alert_json` → alert ingestion disabled.
 - Failed config validation.
 
-The extractor is reported idle in live mode when alerts have arrived, the
-extractor has ingested nothing, and the daemon has been up for more than 30
-seconds. This usually means `default_filter` is missing or the extractor file
+The extractor is reported idle when alerts have arrived, the extractor has
+ingested nothing, and the daemon has been up for more than 30 seconds. This usually means `default_filter` is missing or the extractor file
 is not growing.
 
 ## Logging

@@ -18,9 +18,9 @@ else
 fi
 
 export PIGUI_HOME="${PIGUI_HOME:-$PIGUI_ROOT}"
-export PIGUI_FIXTURE_ALERT_JSON="${PIGUI_FIXTURE_ALERT_JSON:-./tests/fixtures/alert_json/valid.jsonl}"
 
 # Defaults keep older .env files and partial environments working.
+export PIGUI_DB_PATH="${PIGUI_DB_PATH:-./var/lib/pigui.db}"
 export PIGUI_SNORT_BIN="${PIGUI_SNORT_BIN:-../build/src/snort}"
 export PIGUI_SNORT_CONFIG="${PIGUI_SNORT_CONFIG:-../lua/snort.lua}"
 export PIGUI_SNORT_LUA_PATH="${PIGUI_SNORT_LUA_PATH:-../lua}"
@@ -30,6 +30,5 @@ export PIGUI_SNORT_PIDFILE="${PIGUI_SNORT_PIDFILE:-./var/log/snort/snort.pid}"
 export PIGUI_SNORT_CONTROL_SOCKET="${PIGUI_SNORT_CONTROL_SOCKET:-./var/run/snort.sock}"
 export PIGUI_EXTRACTOR_JSON="${PIGUI_EXTRACTOR_JSON:-./var/log/snort/file_connector_pigui_transmit}"
 export PIGUI_PROCESS_POLL_MS="${PIGUI_PROCESS_POLL_MS:-1000}"
-export PIGUI_LIVE_DB_PATH="${PIGUI_LIVE_DB_PATH:-./var/lib/pigui-live.db}"
 
 mkdir -p var/run var/log var/lib var/log/snort var/snort

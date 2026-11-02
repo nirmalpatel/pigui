@@ -23,7 +23,7 @@ Full documentation lives in [`docs/`](docs/README.md).
 | Document | Contents |
 |---|---|
 | [Overview](docs/00-abridged-docs.md) | Core concepts, boundaries, and links |
-| [Quick start](docs/01-quickstart.md) | Fixture mode, live capture, CLI checks |
+| [Quick start](docs/01-quickstart.md) | Dev app, live capture, tests, diagnostics |
 | [Architecture](docs/02-architecture.md) | Components, crates, layout, paths |
 | [Data](docs/03-data.md) | Sources, reconciliation, SQLite schema |
 | [Daemon](docs/04-daemon.md) | Lifecycle, tasks, privileges, storage |
@@ -40,7 +40,7 @@ cd pigui
 cp .env.example .env        # optional; scripts fall back to .env.example
 
 ./scripts/probe-snort.sh    # resolve Snort and print capabilities
-./scripts/run-dev.sh        # fixture daemon, then the Tauri window
+./scripts/run-dev.sh        # Snort + daemon + Tauri dev
 ```
 
 Package the macOS app (unsigned by default):
@@ -59,11 +59,10 @@ Signed and notarized macOS builds are published on the
 current release is `pigui-v0.1.0`; download
 `PIGUI-0.1.0-macos-arm64.dmg` and its `SHA256SUMS`.
 
-For live capture see [docs/01-quickstart.md](docs/01-quickstart.md). The
-development scripts use `sudo` to launch Snort for BPF access. The packaged app
-does not use `sudo`: the root helper is registered through SMAppService and
+The development script uses `sudo` to launch Snort for BPF access. The packaged
+app does not use `sudo`: the root helper is registered through SMAppService and
 writes a root-owned staged Snort payload before capture starts. The daemon does
-not run as root.
+not run as root. See [docs/01-quickstart.md](docs/01-quickstart.md).
 
 ## Platform
 

@@ -54,7 +54,7 @@ app uses SMAppService and XPC instead and never asks PIGUI for a password.
 | `pigui-firewall` | Firewall traits and block request/outcome types; dry-run backend; PF placeholder |
 | `pigui-daemon` | Ingestion, correlation, SQLite store, RPC server, background tasks |
 | `pigui-helper` | Placeholder crate; the packaged helper is Swift under `packaging/macos/helper` |
-| `pigui-cli` | Headless management, diagnostics, direct fixture ingestion |
+| `pigui-cli` | Headless management, diagnostics, test fixture ingestion |
 | `pigui-gui` | Tauri Rust commands and Svelte frontend |
 
 Dependency direction is one-way: `pigui-core` is the base, `pigui-snort` and
@@ -98,10 +98,7 @@ pigui/
 │   ├── check-telemetry.sh
 │   ├── dev-env.sh
 │   ├── probe-snort.sh
-│   ├── run-dev.sh
-│   ├── run-live.sh
-│   ├── snort-live.sh
-│   └── stop-live.sh
+│   └── run-dev.sh
 ├── tests/
 │   └── fixtures/
 │       ├── alert_json/
@@ -121,13 +118,11 @@ Development uses paths under `pigui/var/` and reads Snort from the parent tree:
 ../build/src/snort                 # default Snort binary
 ../lua/snort.lua                   # source config
 var/run/pigui-daemon.sock          # daemon RPC socket
-var/lib/pigui.db                   # fixture/default database
-var/lib/pigui-live.db              # live database
+var/lib/pigui.db                   # dev and prod database
 var/lib/pigui-gui.db               # GUI preferences
 var/snort/snort.lua                # generated Snort config
 var/snort/snort_defaults.lua       # copied defaults
-var/log/alert_json.txt             # fixture alert path default
-var/log/snort/                     # live alert/extractor/pid/log output
+var/log/snort/                     # alert/extractor/pid/log output
 var/log/snort/file_connector_pigui_transmit
 ```
 

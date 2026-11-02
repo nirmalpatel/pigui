@@ -19,7 +19,7 @@ pub struct Config {
     pub db_path: PathBuf,
     pub alert_json: PathBuf,
     pub socket_path: PathBuf,
-    pub mode: String,
+    pub environment: String,
     pub snort_interface: Option<String>,
     pub snort_log_dir: PathBuf,
     pub snort_config_dir: PathBuf,
@@ -71,28 +71,14 @@ impl Config {
                 candidate.is_dir().then_some(candidate)
             });
 
-        let default_db = if bundled {
-            home.join("var/lib/pigui-live.db")
-        } else {
-            home.join("var/lib/pigui.db")
-        };
+        let default_db = home.join("var/lib/pigui.db");
         let db_path = absolute(&home, path_var("PIGUI_DB_PATH", default_db));
-        let alert_json = absolute(
-            &home,
-            path_var("PIGUI_ALERT_JSON", log_dir.join("alert_json.txt")),
-        );
         let socket_path = absolute(
             &home,
             path_var("PIGUI_SOCKET", run_dir.join("pigui-daemon.sock")),
         );
 
-        let mode = env::var("PIGUI_MODE").unwrap_or_else(|_| {
-            if bundled {
-                "live".to_string()
-            } else {
-                "fixture".to_string()
-            }
-        });
+        let environment = if bundled { "prod" } else { "dev" }.to_string();
         let snort_interface = env::var("PIGUI_SNORT_INTERFACE")
             .ok()
             .filter(|value| !value.is_empty());
@@ -105,12 +91,10 @@ impl Config {
             &home,
             path_var("PIGUI_SNORT_LOG_DIR", default_snort_log_dir),
         );
-        // In live mode the alert file is written by Snort into its log dir.
-        let alert_json = if mode == "live" && env::var_os("PIGUI_ALERT_JSON").is_none() {
-            snort_log_dir.join("alert_json.txt")
-        } else {
-            alert_json
-        };
+        let alert_json = absolute(
+            &home,
+            path_var("PIGUI_ALERT_JSON", snort_log_dir.join("alert_json.txt")),
+        );
         let snort_config_dir = absolute(
             &home,
             path_var("PIGUI_SNORT_CONFIG_DIR", home.join("var/snort")),
@@ -145,7 +129,7 @@ impl Config {
             db_path,
             alert_json,
             socket_path,
-            mode,
+            environment,
             snort_interface,
             snort_log_dir,
             snort_config_dir,
@@ -233,7 +217,7 @@ mod tests {
             db_path: home.join("var/lib/pigui.db"),
             alert_json: home.join("var/log/alert_json.txt"),
             socket_path: home.join("var/run/pigui-daemon.sock"),
-            mode: "fixture".to_string(),
+            environment: "dev".to_string(),
             snort_interface: None,
             snort_log_dir: home.join("var/log/snort"),
             snort_config_dir: home.join("var/snort"),

@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     ingest::spawn_name_resolver(state.clone());
 
     tracing::info!(
-        mode = %config.mode,
+        environment = %config.environment,
         db = %config.db_path.display(),
         alerts = %alerts_file.display(),
         extractor = %config.extractor_json.display(),

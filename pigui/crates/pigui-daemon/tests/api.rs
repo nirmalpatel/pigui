@@ -30,7 +30,7 @@ fn test_config(root: &Path) -> Config {
         db_path: home.join("var/lib/pigui.db"),
         alert_json: home.join("var/log/alert_json.txt"),
         socket_path: home.join("var/run/pigui-daemon.sock"),
-        mode: "fixture".to_string(),
+        environment: "dev".to_string(),
         snort_interface: None,
         snort_log_dir: home.join("var/log/snort"),
         snort_config_dir: home.join("var/snort"),
