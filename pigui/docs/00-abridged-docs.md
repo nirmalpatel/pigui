@@ -35,7 +35,7 @@ compatible with upstream Snort changes.
 | `pigui-gui` | User | Tauri 2 + Svelte presentation shell | Implemented |
 | `pigui-daemon` | Unprivileged | Ingestion, correlation, SQLite, policy, local RPC | Implemented |
 | Snort 3 | Root | Passive packet inspection and telemetry | Implemented |
-| OS collectors | Daemon thread | Process/socket attribution via `nettop` and `ps` | Partial: macOS only |
+| OS collectors | Daemon thread | Process/socket attribution via `nettop` and `ps` | Partial: macOS collector implemented |
 | `pigui-helper` | Root | Narrow capture lifecycle and dry-run firewall actions | Partial: SMAppService/XPC helper implemented |
 | `pigui-cli` | User | Headless management and diagnostics | Implemented |
 | `pigui-firewall` | Library | Firewall backend trait and dry-run/PF placeholders | Partial |
@@ -87,6 +87,9 @@ See [09-roadmap.md](09-roadmap.md) for milestone status.
 
 ## Platform reality
 
+PIGUI is designed to be cross-platform. The constraints below describe the
+current macOS implementation; Linux and Windows adapters are in progress.
+
 These constraints are architectural requirements:
 
 - Snort on macOS uses pcap/BPF passively. It detects and logs; it cannot drop
@@ -109,7 +112,8 @@ Resolved:
 
 - GUI: Rust + Tauri 2 with a Svelte frontend.
 - Storage: SQLite first; GUI preferences use a separate GUI-local SQLite file.
-- macOS first; Linux and Windows later.
+- Cross-platform design; macOS is the current platform, with Linux and Windows
+  in progress.
 - PIGUI consumes Snort as an external process, not a linked library.
 - Enforcement is firewall-based and off by default.
 - PIGUI is GPLv2-compatible while it lives in the Snort 3 tree.

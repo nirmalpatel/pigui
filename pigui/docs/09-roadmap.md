@@ -17,7 +17,7 @@ what is planned.
 | M7 | Daemon API and GUI MVP | Partial: live processes/connections/destinations/alerts/domains/DNS API and tabs complete |
 | M8 | launchd packaging and macOS system integration | Partial: signed/notarized/stapled app and DMG implemented; installed helper launch verification pending |
 | M9 | Hardening, retention, audit, tests, documentation | Partial: tests and docs exist; retention, audit, and hardening pending |
-| M10 | Linux/ufw/nftables and Windows research | Later |
+| M10 | Linux/ufw/nftables and Windows support | In progress |
 
 ## Implemented
 
@@ -57,11 +57,12 @@ what is planned.
 
 | Platform | Snort mode | Enforcement | Process attribution | Status |
 |---|---|---|---|---|
-| macOS 14+ | Passive pcap/BPF | PF (planned) | `nettop`/`ps` | First target |
-| Linux | Passive first, inline optional | ufw/nftables (planned) | `ss`/`/proc`/eBPF (planned) | Later |
-| Windows | Native support uncertain | Defender Firewall/WFP (planned) | `GetExtendedTcpTable`/ETW (planned) | Research |
+| macOS 14+ | Passive pcap/BPF | PF (planned) | `nettop`/`ps` | Supported |
+| Linux | Passive first, inline optional | ufw/nftables (planned) | `ss`/`/proc`/eBPF (planned) | In progress |
+| Windows | Native support uncertain | Defender Firewall/WFP (planned) | `GetExtendedTcpTable`/ETW (planned) | In progress |
 
-macOS is the only supported platform for the first release.
+macOS is the currently supported platform. Linux and Windows support is in
+progress.
 
 ## Risks
 
@@ -83,7 +84,8 @@ Resolved:
 
 - GUI stack: Rust + Tauri 2 with a Svelte frontend.
 - Storage: SQLite first; GUI preferences use a separate GUI-local SQLite file.
-- macOS first; Linux and Windows later.
+- Cross-platform design; macOS is the current platform, with Linux and Windows
+  in progress.
 - PIGUI consumes Snort as an external process, not a linked library.
 - Snort control socket is preferred for management, with signal/file fallback.
 - Enforcement is firewall-based and off by default.

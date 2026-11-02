@@ -12,7 +12,7 @@ domains.
 | `pigui-daemon` | Unprivileged | Ingestion, storage, policy, local API | Implemented |
 | `pigui-helper` | Root | Capture lifecycle, staged Snort payload, audit, dry-run firewall actions | Partial: SMAppService/XPC helper implemented |
 | Snort 3 | Root | Packet inspection, alerts, flow/domain telemetry | Implemented |
-| OS collectors | Daemon thread | Process/socket attribution | Partial: macOS only |
+| OS collectors | Daemon thread | Process/socket attribution | Partial: macOS collector implemented |
 
 The GUI never calls `pfctl`, Snort, or the helper directly. The daemon owns
 normalization and policy. The helper owns privileged actions. The daemon itself

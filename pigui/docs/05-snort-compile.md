@@ -140,8 +140,8 @@ is simpler and is the recommended release approach.
 
 ## Linux
 
-Status: **unverified** by this project. Treat this section as a starting point,
-not a tested recipe.
+Status: **in progress**. This section is a starting point and is not yet a
+tested recipe.
 
 PIGUI's Linux plan is passive Snort plus a firewall backend (`ufw` first,
 then `nftables`/`ipset`). Inline Snort is optional and not the default.
@@ -172,7 +172,7 @@ Linux collector exists.
 
 ## Windows
 
-Status: **not supported**. Native Windows Snort is not a first-class build
+Status: **in progress**. Native Windows Snort is not yet a first-class build
 target in this tree.
 
 Recommended paths:

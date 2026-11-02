@@ -1,9 +1,10 @@
 # PIGUI
 
-PIGUI is a macOS-first network security application built alongside Snort 3. It
-runs Snort as an external passive sensor and adds OS process attribution, a
-local manager daemon, a narrow privileged firewall helper, and an
-Activity Monitor-style GUI.
+PIGUI is a cross-platform network security application built alongside Snort 3.
+macOS is currently supported; Linux and Windows support is in progress. It runs
+Snort as an external passive sensor and adds OS process attribution, a local
+manager daemon, a narrow privileged firewall helper, and an Activity
+Monitor-style GUI.
 
 > This repository is a fork of [snort3/snort3](https://github.com/snort3/snort3).
 > PIGUI lives on the `pigui` branch, which is this fork's default branch. The

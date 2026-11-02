@@ -1,6 +1,6 @@
 # PIGUI
 
-PIGUI is a macOS-first network security application built alongside Snort 3.
+PIGUI is a cross-platform network security application built alongside Snort 3.
 It consumes Snort as an external passive sensor and adds OS process
 attribution, a local manager daemon, a narrow privileged helper, and an
 Activity Monitor-style GUI.
@@ -62,8 +62,8 @@ not run as root.
 
 ## Platform
 
-macOS is the first and only supported platform for the first release. Linux and
-Windows are planned as later adapters. See
+PIGUI is designed to be cross-platform. macOS is the current supported platform;
+Linux and Windows support is in progress. See
 [docs/09-roadmap.md](docs/09-roadmap.md).
 
 ## License

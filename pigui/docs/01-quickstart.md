@@ -9,7 +9,7 @@ See [`packaging/macos/README.md`](../packaging/macos/README.md).
 
 ## Prerequisites
 
-- macOS (current verified platform)
+- macOS (currently supported; Linux and Windows support is in progress)
 - Rust 1.85 or newer with Cargo
 - Node.js 22 and npm
 - A Snort 3 binary. The default is `../build/src/snort`, relative to `pigui/`.
