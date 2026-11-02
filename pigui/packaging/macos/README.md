@@ -111,24 +111,62 @@ DMG itself.
 
 ## Release checklist
 
-1. Commit and tag the source that produced the build.
-2. Run formatting, tests, Clippy, and the GUI check.
-3. Run `./packaging/macos/check-signing.sh`; both checks must be OK.
-4. Build with `PIGUI_NOTARIZE=1` (notarizes the app and the DMG).
-5. Confirm `stapler validate` and `spctl -a -vvv -t install`.
-6. Record the app and DMG SHA-256 values, both notarization submission IDs,
-   Snort version, and build environment in `releases/<version>.md`.
-7. Publish that exact DMG and its SHA-256.
+1. Run formatting, tests, Clippy, and the GUI check.
+2. Run `./packaging/macos/check-signing.sh`; both checks must be OK.
+3. Build with `PIGUI_NOTARIZE=1` (notarizes the app and the DMG).
+4. Confirm `stapler validate` and `spctl -a -vvv -t install`.
+5. Run `./packaging/check-release.sh`.
+6. Record the new DMG SHA-256, DMG notarization submission ID, app submission
+   ID, Snort version, and build environment in
+   `packaging/releases/v<version>/macos-<arch>.md`.
+7. Commit the release metadata, create the `pigui-v<version>` tag, and attach
+   the exact DMG plus `SHA256SUMS` to the GitHub release.
 8. If the build changes, bump the version and repeat.
 
 If `stapler staple` fails with a transient CloudKit/network error, retry it.
 Do not rebuild just because stapling failed.
 
+The app ticket and the DMG ticket are separate. If the app bundle is unchanged
+from an already verified build, the existing app ticket can be reused and only
+the DMG needs a new submission. Regenerating the DMG wrapper does not change the
+app, but any change inside `PIGUI.app` requires a new app submission.
+
+## DMG layout
+
+The DMG is built from a staging directory containing:
+
+```text
+PIGUI.app
+Applications -> /Applications
+```
+
+The `Applications` symlink is required so users can drag `PIGUI.app` into
+`Applications` from the mounted volume. `make-dmg.sh` owns this layout and is
+also used by `sign-and-notarize.sh`.
+
+Artifact names include the platform and architecture:
+
+```text
+PIGUI-<version>-macos-<arch>.dmg
+```
+
 ## Build
+
+Build the app and DMG from source:
 
 ```bash
 cd pigui
 ./packaging/macos/build-app.sh
+```
+
+To regenerate only the DMG around an existing verified app:
+
+```bash
+PIGUI_SIGN_IDENTITY="Developer ID Application: ..." \
+PIGUI_TEAM_ID="..." \
+PIGUI_NOTARY_PROFILE="pigui-notary" \
+PIGUI_NOTARIZE=1 \
+./packaging/macos/make-dmg.sh target/macos/PIGUI.app 0.1.0
 ```
 
 The unsigned app is written to `target/macos/PIGUI.app`. A signed build without
@@ -147,6 +185,8 @@ Useful environment variables:
 | `PIGUI_TEAM_ID` | Apple Developer team identifier |
 | `PIGUI_NOTARY_PROFILE` | `notarytool` keychain profile |
 | `PIGUI_NOTARIZE` | Set to `1` to notarize and staple the DMG |
+| `PIGUI_TARGET_ARCH` | Override the architecture in the DMG filename |
+| `PIGUI_DMG_PATH` | Override the output DMG path |
 
 ## Enable live capture (packaged app)
 
@@ -189,13 +229,14 @@ After signing, the script produces:
 
 ```text
 target/macos/PIGUI.app
-target/macos/PIGUI-<version>.dmg
+target/macos/PIGUI-<version>-macos-<arch>.dmg
 ```
 
-The DMG path is excluded by `.gitignore`. Record its checksum in the release
-note instead. The current release record is
-[`releases/0.1.0.md`](releases/0.1.0.md); start new releases from
-[`releases/TEMPLATE.md`](releases/TEMPLATE.md).
+The DMG path is excluded by `.gitignore`. Commit its checksum and metadata, not
+the DMG itself. Release records live in
+[`../releases/`](../releases/README.md); the current macOS record is
+[`../releases/v0.1.0/macos-arm64.md`](../releases/v0.1.0/macos-arm64.md). Start
+new releases from [`../releases/TEMPLATE/`](../releases/TEMPLATE/).
 
 ## What the app contains
 

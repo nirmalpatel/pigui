@@ -1,0 +1,21 @@
+{
+  "product": "PIGUI",
+  "version": "<version>",
+  "tag": "pigui-v<version>",
+  "source": "https://github.com/nirmalpatel/pigui/tree/pigui-v<version>",
+  "app_build_commit": "<commit>",
+  "artifacts": [
+    {
+      "file": "PIGUI-<version>-macos-<arch>.dmg",
+      "platform": "macos",
+      "arch": "<arch>",
+      "min_os": "<min-os>",
+      "sha256": "<sha256>",
+      "size_bytes": 0,
+      "signed": true,
+      "notarized": true,
+      "stapled": true,
+      "notary_submission_id": "<submission-id>"
+    }
+  ]
+}

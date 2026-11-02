@@ -22,6 +22,21 @@ process attribution, the daemon RPC API, the CLI, the Tauri shell, macOS app
 packaging, the SMAppService/XPC helper, and a signed/notarized DMG workflow
 exist. PF enforcement and rule bundles are still planned.
 
+## Download
+
+Signed and notarized macOS releases are published on the
+[GitHub releases page](https://github.com/nirmalpatel/pigui/releases).
+
+```text
+Latest macOS release:  pigui-v0.1.0
+Artifact:              PIGUI-0.1.0-macos-arm64.dmg
+Requirements:          macOS 14 or newer, Apple silicon
+Verification:          SHA256SUMS, notarized and stapled DMG
+```
+
+Open the DMG, drag PIGUI to `Applications`, then register the privileged helper
+from the Capture tab. See the release notes for the approval steps.
+
 ## Quick start
 
 ```bash

@@ -1,0 +1,37 @@
+PIGUI v0.1.0
+=============
+
+PIGUI is distributed under the GNU General Public License version 2 only.
+See COPYING in the source tree for the full license text.
+
+Corresponding source for this release:
+
+  https://github.com/nirmalpatel/pigui/tree/pigui-v0.1.0
+
+Bundled components
+------------------
+
+This release bundles Snort 3 and its runtime dependencies. The main bundled
+components and their upstream license families are:
+
+  Component                     License family
+  ----------------------------  --------------------------
+  Snort 3                       GPL-2.0
+  DAQ                           GPL-2.0
+  OpenSSL (libcrypto)           Apache-2.0
+  libdnet                       BSD
+  Hyperscan                     BSD
+  hwloc                         BSD
+  jemalloc                      BSD
+  LuaJIT                        MIT
+  liblzma / xz                  Public domain / 0BSD
+  libpcap                       BSD
+  PCRE2                         BSD
+  Snort rule files              Distributed with the Snort source tree
+
+The exact Rust crate dependency versions are recorded in Cargo.lock and
+Cargo.toml in the corresponding source tree. License texts for the upstream
+components are available from their respective projects and from the Snort 3
+source tree at the tag above.
+
+No warranty is provided. See the GNU General Public License for details.

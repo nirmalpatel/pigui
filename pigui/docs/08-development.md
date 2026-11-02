@@ -89,7 +89,7 @@ The script signs every nested binary, notarizes and staples the app bundle,
 creates the DMG, then notarizes and staples the DMG. The app-level ticket is
 required for the `SMAppService` LaunchDaemon. Record the DMG SHA-256,
 submission IDs, and build environment in
-`packaging/macos/releases/<version>.md`.
+`packaging/releases/v<version>/macos-<arch>.md`.
 
 A notarization ticket applies only to the exact DMG that was submitted. Any
 rebuild requires a new submission. Do not rebuild a release DMG after

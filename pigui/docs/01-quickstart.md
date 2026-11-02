@@ -7,6 +7,21 @@ For the signed macOS app, use the **Capture** tab to register and approve the
 SMAppService helper, then enable capture. The packaged app does not use `sudo`.
 See [`packaging/macos/README.md`](../packaging/macos/README.md).
 
+## Install the macOS app
+
+Download `PIGUI-<version>-macos-arm64.dmg` and `SHA256SUMS` from the
+[GitHub releases page](https://github.com/nirmalpatel/pigui/releases). Verify
+the download, open the DMG, and drag `PIGUI.app` to `Applications`:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+spctl -a -vvv -t install PIGUI-<version>-macos-arm64.dmg
+```
+
+Then launch PIGUI and use the **Capture** tab to register and approve the
+helper. macOS requires the app to be in `/Applications` for the
+`SMAppService` LaunchDaemon flow.
+
 ## Prerequisites
 
 - macOS (currently supported; Linux and Windows support is in progress)

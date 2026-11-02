@@ -1,13 +1,15 @@
-# PIGUI <version> - macOS release record
+# PIGUI <version> - macOS arm64 release record
 
 ## Artifact
 
 ```text
-File:       PIGUI-<version>.dmg
-Path:       target/macos/PIGUI-<version>.dmg
-SHA-256:    <sha256>
-Arch:       arm64
-Min macOS:  14.0
+File:               PIGUI-<version>-macos-arm64.dmg
+Path:               target/macos/PIGUI-<version>-macos-arm64.dmg
+SHA-256:            <sha256>
+Arch:               arm64
+Min macOS:          14.0
+App build commit:   <commit>
+Release tag:        pigui-v<version>
 ```
 
 ## Signing and notarization
@@ -38,10 +40,11 @@ Snort:       <version>
 ## Verification
 
 ```bash
+shasum -a 256 -c SHA256SUMS
 xcrun stapler validate target/macos/PIGUI.app
-xcrun stapler validate target/macos/PIGUI-<version>.dmg
+xcrun stapler validate target/macos/PIGUI-<version>-macos-arm64.dmg
 spctl -a -vvv -t exec target/macos/PIGUI.app
-spctl -a -vvv -t install target/macos/PIGUI-<version>.dmg
+spctl -a -vvv -t install target/macos/PIGUI-<version>-macos-arm64.dmg
 ./packaging/macos/verify-bundle.sh target/macos/PIGUI.app
 ```
 

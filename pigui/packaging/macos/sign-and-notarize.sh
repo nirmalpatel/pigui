@@ -9,7 +9,6 @@ TEAM_ID="${PIGUI_TEAM_ID:-}"
 NOTARY_PROFILE="${PIGUI_NOTARY_PROFILE:-}"
 NOTARIZE="${PIGUI_NOTARIZE:-0}"
 CONTENTS="$APP_DIR/Contents"
-DMG="${APP_DIR%/*}/PIGUI-$VERSION.dmg"
 ZIP="${APP_DIR%/*}/PIGUI-$VERSION.zip"
 
 sign() {
@@ -83,16 +82,16 @@ if [ "$NOTARIZE" = "1" ]; then
 fi
 
 echo "creating DMG"
-rm -f "$DMG"
-hdiutil create -volname "PIGUI" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG" >/dev/null
-codesign --force --timestamp --sign "$IDENTITY" "$DMG"
-
-if [ "$NOTARIZE" = "1" ]; then
-  notarize_and_staple "$DMG" "$DMG" "DMG"
-  spctl -a -vvv -t install "$DMG"
-fi
+PIGUI_SIGN_IDENTITY="$IDENTITY" \
+PIGUI_TEAM_ID="$TEAM_ID" \
+PIGUI_NOTARY_PROFILE="$NOTARY_PROFILE" \
+PIGUI_NOTARIZE="$NOTARIZE" \
+PIGUI_BUILD_DIR="${PIGUI_BUILD_DIR:-}" \
+PIGUI_TARGET_ARCH="${PIGUI_TARGET_ARCH:-}" \
+PIGUI_DMG_PATH="${PIGUI_DMG_PATH:-}" \
+PIGUI_DMG_VOLNAME="${PIGUI_DMG_VOLNAME:-}" \
+  "$SCRIPT_DIR/make-dmg.sh" "$APP_DIR" "$VERSION"
 
 if [ -n "$TEAM_ID" ]; then
   echo "signed with team $TEAM_ID"
 fi
-echo "release artifact: $DMG"

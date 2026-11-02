@@ -1,0 +1,21 @@
+{
+  "product": "PIGUI",
+  "version": "0.1.0",
+  "tag": "pigui-v0.1.0",
+  "source": "https://github.com/nirmalpatel/pigui/tree/pigui-v0.1.0",
+  "app_build_commit": "ff712f1e0",
+  "artifacts": [
+    {
+      "file": "PIGUI-0.1.0-macos-arm64.dmg",
+      "platform": "macos",
+      "arch": "arm64",
+      "min_os": "14.0",
+      "sha256": "118210aee2f02fcc35324bb1f2e14c8ce930bd05d596230a72d936fc6fb4d473",
+      "size_bytes": 18287708,
+      "signed": true,
+      "notarized": true,
+      "stapled": true,
+      "notary_submission_id": "5a10a86b-bdca-4044-bf4f-e96474a3bd2b"
+    }
+  ]
+}
