@@ -39,6 +39,10 @@ Failure:
 | `status` | `{}` | `StatusPayload` |
 | `health` | `{}` | `HealthPayload` |
 | `snort.status` | `{}` | `SnortStatusPayload` |
+| `capture.status` | `{}` | `CaptureStatusPayload` |
+| `capture.start` | `{interface}` | `CaptureState` |
+| `capture.stop` | `{}` | `true` |
+| `capture.helper_status` | `{}` | helper status JSON |
 | `alerts.list` | `{limit?, offset?}` | `AlertList` |
 | `destinations.list` | `{limit?, offset?}` | `DestinationList` |
 | `destinations.detail` | `{ip}` | `DestinationDetail` |
@@ -107,6 +111,10 @@ through this API.
   "snort_running": true,
   "snort_pid": 12345,
   "snort_interface": "en0",
+  "capture_running": true,
+  "capture_interface": "en0",
+  "capture_mode": "helper",
+  "snort_config_hash": "0123456789abcdef",
   "active_flows": 18,
   "active_processes": 7,
   "extractor_ingested": 500,
@@ -126,6 +134,36 @@ through this API.
 
 `capabilities.daq_modules` is currently always empty. `degraded` is derived from
 capabilities. `extractor_idle` is set when alerts have arrived but extractor records have not.
+
+### `CaptureStatusPayload`
+
+`capture.status` returns the daemon's persisted capture state plus the helper's
+current status:
+
+```json
+{
+  "capture": {
+    "interface": "en0",
+    "snort_pid": 12345,
+    "log_dir": "/Users/me/Library/Application Support/PIGUI/snort",
+    "mode": "helper",
+    "started_at": 1750000000
+  },
+  "helper": {
+    "ok": true,
+    "data": {
+      "version": "0.1.0",
+      "uid": 0,
+      "capture_running": true,
+      "snort_pid": 12345,
+      "interface": "en0"
+    }
+  }
+}
+```
+
+`capture.start` takes `{"interface":"en0"}`. `capture.stop` takes `{}`.
+`capture.helper_status` returns the raw helper response.
 
 ### `HealthPayload`
 
@@ -435,7 +473,7 @@ Errors are plain strings. Common cases:
 | `pigui-cli dns` / `tls` / `http` | `dns.list` / `tls.list` / `http.list` |
 | `pigui-cli snort status` | local PID-file status, not RPC |
 
-The GUI uses `status`, list methods, detail methods, trust, watched-domain, and
+The GUI uses `status`, capture, list, detail, trust, watched-domain, and
 settings/maintenance methods. It does not currently expose TLS/HTTP/QUIC lists.
 
 ## Current security gaps

@@ -43,9 +43,9 @@ what is planned.
   live scripts do not wire it.
 - Signal-based Snort management.
 - Firewall: types and a dry-run backend exist; PF execution is a placeholder.
-- Helper: XPC service, payload staging, Snort lifecycle, audit, and dry-run
-  firewall actions exist; PF execution, capture-state persistence across helper
-  restarts, and fuller GUI onboarding remain.
+- Helper: XPC service, payload staging, Snort lifecycle, audit, dry-run
+  firewall actions, dev-mode launchd/XPC capture, and capture-state recovery
+  exist; PF execution and fuller GUI onboarding remain.
 - Rule bundles and policy engine.
 - Log rotation (database retention is implemented).
 - Sensor stats and firewall action history; helper privileged-action audit exists.

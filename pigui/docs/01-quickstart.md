@@ -36,9 +36,10 @@ This starts the whole app:
 1. Stops any stale PIGUI/Snort process from a previous run.
 2. Requests `sudo` and selects the capture interface.
 3. Generates and validates `var/snort/snort.lua`.
-4. Starts Snort under `sudo`.
+4. Builds and starts the dev capture helper as a temporary root LaunchDaemon.
 5. Builds and starts `pigui-daemon`.
-6. Runs `npm install` and `npm run tauri dev` in `apps/pigui-gui`.
+6. Starts capture through daemon -> helper -> Snort.
+7. Runs `npm install` and `npm run tauri dev` in `apps/pigui-gui`.
 
 Press Ctrl-C to stop Snort, the daemon, and the app together. If a previous run
 was killed and left processes behind, use the same script:

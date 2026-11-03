@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
-use pigui_core::helper;
 use pigui_core::rpc::{
-    METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL,
+    METHOD_ALERTS_LIST, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START, METHOD_CAPTURE_STATUS,
+    METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL,
     METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST,
     METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
     METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
@@ -223,17 +223,30 @@ fn service_unregister_helper() -> Result<String, String> {
 
 #[tauri::command]
 fn helper_status() -> Result<Value, String> {
-    helper::status().map_err(|error| error.to_string())
+    client()?
+        .call(METHOD_CAPTURE_HELPER_STATUS, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn capture_status() -> Result<Value, String> {
+    client()?
+        .call(METHOD_CAPTURE_STATUS, json!({}))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn helper_enable_capture(interface: String) -> Result<Value, String> {
-    helper::enable_capture(&interface).map_err(|error| error.to_string())
+    client()?
+        .call(METHOD_CAPTURE_START, json!({ "interface": interface }))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn helper_disable_capture() -> Result<Value, String> {
-    helper::disable_capture().map_err(|error| error.to_string())
+    client()?
+        .call(METHOD_CAPTURE_STOP, json!({}))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -419,6 +432,7 @@ fn main() {
             service_register_helper,
             service_unregister_helper,
             helper_status,
+            capture_status,
             helper_enable_capture,
             helper_disable_capture,
             get_status,

@@ -15,9 +15,13 @@ domains.
 | OS collectors | Daemon thread | Process/socket attribution | Partial: macOS collector implemented |
 
 The GUI never calls `pfctl`, Snort, or the helper directly. The daemon owns
-normalization and policy. The helper owns privileged actions. The daemon itself
-is unprivileged. Development scripts use `sudo` to launch Snort; the packaged
-app uses SMAppService and XPC instead and never asks PIGUI for a password.
+normalization, policy, and capture control. The helper owns privileged actions.
+The daemon itself is unprivileged.
+
+Development and production now use the same control path: GUI -> daemon ->
+helper -> Snort. Development uses a temporary root LaunchDaemon and the same
+Swift helper in `--dev` mode; production uses SMAppService and a signed,
+notarized LaunchDaemon. Neither path asks PIGUI for a password.
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -30,10 +34,11 @@ app uses SMAppService and XPC instead and never asks PIGUI for a password.
 │ tailers, collector, SQLite, RPC API, policy (planned)       │
 │ Unprivileged                                                │
 └──────────┬──────────────────────────────┬───────────────────┘
-           │ planned RPC                  │ files / logs
+           │ helperctl / XPC              │ files / logs
 ┌──────────▼──────────────┐   ┌───────────▼──────────────────┐
-│ pigui-helper (planned)  │   │ Snort 3                      │
-│ Root. PF/ufw only.      │   │ Root. Passive IDS.           │
+│ pigui-helper            │   │ Snort 3                      │
+│ Root. Capture + audit.  │   │ Root. Passive IDS.           │
+│ Firewall actions dry-run│   │                              │
 └──────────┬──────────────┘   └───────────┬──────────────────┘
            │                              │ alert_json, extractor
    PF anchor/table (planned)              │ perf/flow dumps (planned)
@@ -123,6 +128,9 @@ var/snort/snort.lua                # generated Snort config
 var/snort/snort_defaults.lua       # copied defaults
 var/log/snort/                     # alert/extractor/pid/log output
 var/log/snort/file_connector_pigui_transmit
+var/run/helper/capture.json        # dev helper capture state
+var/log/helper.log                 # dev helper output
+var/log/helper-audit.log           # dev helper audit trail
 ```
 
 macOS production paths:
@@ -146,28 +154,32 @@ Development must not write into the parent Snort source tree.
 Current implemented flow:
 
 1. The daemon probes Snort and reports capabilities.
-2. `snort generate-config` copies the parent `lua/snort.lua` and
+2. The GUI asks the daemon to start capture. The daemon calls the helper over
+   `pigui-helperctl`/XPC, and the helper starts Snort.
+3. `snort generate-config` copies the parent `lua/snort.lua` and
    `snort_defaults.lua`, appends PIGUI extractor/logging overrides, copies rule
    files, and validates the result with `snort -T`.
-3. Snort writes `alert_json.txt` and the extractor JSONL file under PIGUI's
+4. Snort writes `alert_json.txt` and the extractor JSONL file under PIGUI's
    state directory.
-4. The daemon tails both files, parses records, and writes to SQLite.
-5. A background thread polls `nettop`, enriches processes with `ps`, and
+5. The daemon records the actual capture interface and uses it for attribution.
+6. The daemon tails both files, parses records, and writes to SQLite.
+7. A background thread polls `nettop`, enriches processes with `ps`, and
    writes live flows and process rows.
-6. Another background thread performs PTR lookups and watched-domain
+8. Another background thread performs PTR lookups and watched-domain
    resolution.
-7. The daemon serves normalized state over a Unix socket.
-8. The GUI and CLI query the daemon.
+9. The daemon serves normalized state over a Unix socket.
+10. The GUI and CLI query the daemon.
 
 Planned flow additions:
 
 1. Rule bundle creation, validation, atomic activation, and rollback.
 2. Policy evaluation producing alert, block, quarantine, or manual decisions.
 3. Privileged helper calls to apply PF/ufw/nftables changes.
-4. Audit log, retention jobs, and sensor statistics.
+4. Sensor statistics.
 
-The current code does not invoke the helper, apply firewall rules, evaluate
-policy, or manage rule bundles.
+The current code invokes the helper for capture lifecycle and dry-run firewall
+actions. It does not apply firewall rules, evaluate policy, or manage rule
+bundles.
 
 ## Boundaries to preserve
 

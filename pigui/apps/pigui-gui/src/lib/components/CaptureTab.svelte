@@ -152,6 +152,13 @@
     <span class="hint">{status.capabilities.source ?? "unknown source"}</span>
   </article>
   <article class="card">
+    <span class="label">Capture</span>
+    <span class="value" class:ok={status.capture_running} class:warn={!status.capture_running}>
+      {status.capture_running ? "running" : "stopped"}
+    </span>
+    <span class="hint">{status.capture_mode ?? "no helper"} · {status.capture_interface ?? "no interface"}</span>
+  </article>
+  <article class="card">
     <span class="label">Extractor</span>
     <span class="value" class:ok={status.capabilities.extractor && !status.extractor_idle} class:warn={status.extractor_idle}>
       {status.extractor_idle ? "idle" : status.capabilities.extractor ? "available" : "unavailable"}
@@ -168,7 +175,7 @@
     <span class="value" class:ok={!status.collector_error}>
       {status.collector_error ? "error" : "healthy"}
     </span>
-    <span class="hint">nettop every 1s</span>
+    <span class="hint">nettop on {status.capture_interface ?? status.snort_interface ?? "all interfaces"}</span>
   </article>
 </section>
 
@@ -253,5 +260,6 @@
     <div><span class="label">alert json</span><code>{status.alert_json}</code></div>
     <div><span class="label">extractor json</span><code>{status.extractor_file}</code></div>
     <div><span class="label">config</span><code>{status.capabilities.config_path ?? "-"}</code></div>
+    <div><span class="label">config hash</span><code>{status.snort_config_hash ?? "-"}</code></div>
   </div>
 </section>

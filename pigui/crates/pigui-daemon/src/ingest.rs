@@ -130,21 +130,45 @@ pub async fn run_extractor(state: Arc<AppState>, mut tailer: Tailer) {
 /// Poll nettop on a dedicated thread so the async runtime is never blocked.
 pub fn spawn_process_collector(state: Arc<AppState>) {
     std::thread::spawn(move || {
-        let interface = state
-            .config
-            .snort_interface
-            .clone()
-            .or_else(pigui_collector::default_interface);
-        let collector = MacosCollector::new(interface.clone());
+        let mut current_interface =
+            state
+                .capture()
+                .map(|capture| capture.interface)
+                .or_else(|| {
+                    state
+                        .config
+                        .snort_interface
+                        .clone()
+                        .or_else(pigui_collector::default_interface)
+                });
+        let mut collector = MacosCollector::new(current_interface.clone());
         let initial_poll = state.settings().collector.poll_ms.max(250);
 
         tracing::info!(
-            interface = interface.as_deref().unwrap_or("all"),
+            interface = current_interface.as_deref().unwrap_or("all"),
             poll_ms = initial_poll,
             "process collector started"
         );
 
         while !state.is_shutting_down() {
+            let interface = state
+                .capture()
+                .map(|capture| capture.interface)
+                .or_else(|| {
+                    state
+                        .config
+                        .snort_interface
+                        .clone()
+                        .or_else(pigui_collector::default_interface)
+                });
+            if interface != current_interface {
+                tracing::info!(
+                    interface = interface.as_deref().unwrap_or("all"),
+                    "process collector interface changed"
+                );
+                collector = MacosCollector::new(interface.clone());
+                current_interface = interface;
+            }
             match collector.snapshot() {
                 Ok(snapshot) => {
                     let now = crate::store::unix_now();

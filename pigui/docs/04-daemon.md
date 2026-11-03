@@ -8,9 +8,10 @@ normalization, SQLite storage, background collection, and the local RPC API.
 The daemon does **not** run as root. It does not need root for its current
 duties:
 
-- During development, Snort is launched with `sudo` by
-  `scripts/run-dev.sh` so it can open BPF. The script asks Snort to drop to the
-  current user with `-u`/`-g` after capture starts.
+- During development, `scripts/run-dev.sh` starts a temporary root LaunchDaemon
+  running the same Swift helper in `--dev` mode. The daemon asks that helper to
+  start Snort, which drops to the current user with `-u`/`-g` after capture
+  starts. The daemon never runs as root and never invokes `sudo`.
 - In the packaged app, the root helper is registered with `SMAppService` and
   starts Snort from a root-owned staged payload. The helper drops Snort to the
   console user; the app never invokes `sudo`.
@@ -68,6 +69,7 @@ On startup the daemon:
 | Process collector | Settings `collector.poll_ms` (default 1000 ms, minimum 250 ms) | Runs `nettop`, enriches with `ps`, upserts processes and live flows |
 | Name resolver | Settings `resolver.loop_secs` (default 30 s) | Resolves PTR candidates and due watched domains |
 | Maintenance | Settings `maintenance.interval_secs` (default 300 s) | Prunes old rows using the configured retention limits |
+| Capture control | Event-driven RPC | Starts/stops Snort via the dev or packaged helper and records the active interface |
 | RPC server | event-driven | Accepts newline-delimited JSON requests on the Unix socket |
 
 The collectors run on dedicated OS threads so the single-threaded async runtime
@@ -148,5 +150,5 @@ Tracing output goes to stdout with ANSI disabled when not a terminal. Set
 - No control-socket client; Snort is managed by process/PID file.
 - No signal-based reload or stats dump.
 - No policy engine or rule bundle manager.
-- PF execution and capture-state persistence across helper restarts are pending.
+- PF execution is pending; capture state is persisted and recovered across daemon/helper restarts.
 - No log rotation job yet; database retention is implemented.

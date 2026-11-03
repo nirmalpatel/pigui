@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use pigui_core::Config;
 use pigui_core::models::SnortCapabilities;
-use pigui_core::rpc::PruneResult;
+use pigui_core::rpc::{CaptureState, PruneResult};
 use pigui_core::settings::AppSettings;
 use tokio::sync::Notify;
 
@@ -22,6 +22,7 @@ pub struct AppState {
     pub extractor_last_ingest: AtomicU64,
     pub last_snapshot_ts: AtomicU64,
     settings: RwLock<AppSettings>,
+    capture: RwLock<Option<CaptureState>>,
     maintenance_last_run: AtomicU64,
     maintenance_last_deleted: AtomicU64,
     collector_error: Mutex<Option<String>>,
@@ -32,6 +33,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config, store: Store, capabilities: SnortCapabilities) -> Self {
         let settings = store.get_settings().unwrap_or_default();
+        let capture = store.get_capture_state().unwrap_or_default();
         Self {
             config,
             store: Mutex::new(store),
@@ -43,6 +45,7 @@ impl AppState {
             extractor_last_ingest: AtomicU64::new(0),
             last_snapshot_ts: AtomicU64::new(0),
             settings: RwLock::new(settings),
+            capture: RwLock::new(capture),
             maintenance_last_run: AtomicU64::new(0),
             maintenance_last_deleted: AtomicU64::new(0),
             collector_error: Mutex::new(None),
@@ -85,6 +88,16 @@ impl AppState {
     pub fn set_settings(&self, settings: AppSettings) {
         if let Ok(mut current) = self.settings.write() {
             *current = settings;
+        }
+    }
+
+    pub fn capture(&self) -> Option<CaptureState> {
+        self.capture.read().ok().and_then(|capture| capture.clone())
+    }
+
+    pub fn set_capture(&self, capture: Option<CaptureState>) {
+        if let Ok(mut current) = self.capture.write() {
+            *current = capture;
         }
     }
 

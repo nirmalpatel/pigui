@@ -59,10 +59,11 @@ Signed and notarized macOS builds are published on the
 current release is `pigui-v0.1.0`; download
 `PIGUI-0.1.0-macos-arm64.dmg` and its `SHA256SUMS`.
 
-The development script uses `sudo` to launch Snort for BPF access. The packaged
-app does not use `sudo`: the root helper is registered through SMAppService and
-writes a root-owned staged Snort payload before capture starts. The daemon does
-not run as root. See [docs/01-quickstart.md](docs/01-quickstart.md).
+Development uses a temporary root LaunchDaemon to run the same Swift helper in
+`--dev` mode; capture flows through GUI -> daemon -> helper -> Snort. The
+packaged app uses the SMAppService helper with a root-owned staged Snort payload.
+Neither the daemon nor the GUI runs as root, and PIGUI never asks for a
+password. See [docs/01-quickstart.md](docs/01-quickstart.md).
 
 ## Platform
 

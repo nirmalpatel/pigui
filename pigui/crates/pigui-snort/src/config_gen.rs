@@ -6,56 +6,7 @@ use pigui_core::paths::resolve_snort;
 
 use crate::capabilities::validate_config;
 
-const OVERRIDES: &str = r#"
----------------------------------------------------------------------------
--- PIGUI generated overrides (do not edit by hand)
----------------------------------------------------------------------------
-
-alert_json =
-{
-    file = true,
-    fields = 'seconds timestamp gid sid rev priority class msg proto src_addr src_port dst_addr dst_port action app_id service rule dir pkt_num',
-}
-
-dns = { publish_response = true }
-
-file_connector =
-{
-    {
-        connector = 'pigui_events',
-        name = 'pigui',
-        direction = 'transmit',
-        text_format = true,
-    },
-}
-
-extractor =
-{
-    formatting = 'json',
-    connector = 'pigui_events',
-    time = 'unix',
-    default_filter = 'pick',
-    protocols =
-    {
-        { service = 'conn', on_events = 'eof',
-          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p proto service conn_state duration orig_pkts resp_pkts orig_bytes resp_bytes' },
-        { service = 'dns', on_events = 'response',
-          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p proto query qtype_name rcode_name answers TTLs' },
-        { service = 'ssl', on_events = 'tls_metadata_event',
-          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p server_name version validation_status subject issuer' },
-        { service = 'http', on_events = 'eot',
-          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p method host uri user_agent status_code' },
-        { service = 'quic', on_events = 'handshake',
-          fields = 'ts uid pkt_num id.orig_h id.orig_p id.resp_h id.resp_p server_name client_protocol' },
-    },
-}
-
-ips =
-{
-    variables = default_variables,
-    enable_builtin_rules = true,
-}
-"#;
+const OVERRIDES: &str = include_str!("../../../config/snort/pigui.lua");
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GeneratedConfig {
@@ -94,6 +45,7 @@ pub fn generate(config: &Config) -> Result<GeneratedConfig> {
 
     let mut content =
         std::fs::read_to_string(&source).map_err(|error| Error::io(&source, error))?;
+    content.push('\n');
     content.push_str(OVERRIDES);
 
     let hash = fnv1a(content.as_bytes());
@@ -137,6 +89,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp = path.with_extension("lua.tmp");
     std::fs::write(&temp, bytes).map_err(|error| Error::io(&temp, error))?;
     std::fs::rename(&temp, path).map_err(|error| Error::io(path, error))
+}
+
+pub fn file_hash(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|bytes| fnv1a(&bytes))
 }
 
 fn fnv1a(bytes: &[u8]) -> String {

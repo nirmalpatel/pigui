@@ -11,8 +11,8 @@ use pigui_core::models::{
     WatchedDomain,
 };
 use pigui_core::rpc::{
-    AlertRecord, DestinationDetail, DestinationProcess, ListQuery, ProcessDestination,
-    ProcessDetail, PruneResult, SortDirection, TableCount,
+    AlertRecord, CaptureState, DestinationDetail, DestinationProcess, ListQuery,
+    ProcessDestination, ProcessDetail, PruneResult, SortDirection, TableCount,
 };
 use pigui_core::settings::{AppSettings, ThemeMode};
 use rusqlite::{
@@ -30,6 +30,16 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS capture_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    interface TEXT NOT NULL,
+    snort_pid INTEGER,
+    log_dir TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
@@ -636,13 +646,13 @@ impl Store {
         let previous_version = read_schema_version(&conn)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         ensure_endpoints_hostname(&conn)?;
-        if !matches!(previous_version.as_deref(), Some("5")) {
+        if !matches!(previous_version.as_deref(), Some("5" | "6")) {
             migrate_v5(&conn)?;
         }
-        if !matches!(previous_version.as_deref(), Some("3" | "4" | "5")) {
+        if !matches!(previous_version.as_deref(), Some("3" | "4" | "5" | "6")) {
             backfill_domains(&conn)?;
         }
-        set_schema_version(&conn, "5")?;
+        set_schema_version(&conn, "6")?;
         Ok(Self { conn })
     }
 
@@ -2196,8 +2206,10 @@ impl Store {
             .optional()
             .map_err(db)?;
         if let Some(theme) = theme.and_then(|value| ThemeMode::parse(&value)) {
-            let mut settings = AppSettings::default();
-            settings.theme = theme;
+            let settings = AppSettings {
+                theme,
+                ..AppSettings::default()
+            };
             self.save_settings(&settings)?;
         }
         let migrated = legacy.with_extension("db.migrated");
@@ -2234,6 +2246,59 @@ impl Store {
         let settings = AppSettings::default();
         self.save_settings(&settings)?;
         Ok(settings)
+    }
+
+    pub fn get_capture_state(&self) -> Result<Option<CaptureState>> {
+        self.conn
+            .query_row(
+                "SELECT interface, snort_pid, log_dir, mode, started_at
+                 FROM capture_state WHERE id = 1",
+                [],
+                |row| {
+                    Ok(CaptureState {
+                        interface: row.get(0)?,
+                        snort_pid: row.get::<_, Option<i64>>(1)?.map(|value| value as u32),
+                        log_dir: row.get(2)?,
+                        mode: row.get(3)?,
+                        started_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(db)
+    }
+
+    pub fn save_capture_state(&self, capture: &CaptureState) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO capture_state (
+                     id, interface, snort_pid, log_dir, mode, started_at, updated_at
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                     interface = excluded.interface,
+                     snort_pid = excluded.snort_pid,
+                     log_dir = excluded.log_dir,
+                     mode = excluded.mode,
+                     started_at = excluded.started_at,
+                     updated_at = excluded.updated_at",
+                params![
+                    capture.interface,
+                    capture.snort_pid.map(i64::from),
+                    capture.log_dir,
+                    capture.mode,
+                    capture.started_at,
+                    unix_now(),
+                ],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    pub fn clear_capture_state(&self) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM capture_state WHERE id = 1", [])
+            .map_err(db)?;
+        Ok(())
     }
 
     pub fn table_counts(&self) -> Result<Vec<TableCount>> {
@@ -3466,6 +3531,23 @@ mod tests {
         assert_eq!(destination.destination.domains.len(), 1);
         assert_eq!(destination.destination.live_bytes_in, 200);
         assert_eq!(destination.destination.live_bytes_out, 100);
+    }
+
+    #[test]
+    fn capture_state_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.get_capture_state().unwrap().is_none());
+        let capture = CaptureState {
+            interface: "en0".into(),
+            snort_pid: Some(123),
+            log_dir: "/tmp/snort".into(),
+            mode: "dev-helper".into(),
+            started_at: 100,
+        };
+        store.save_capture_state(&capture).unwrap();
+        assert_eq!(store.get_capture_state().unwrap(), Some(capture));
+        store.clear_capture_state().unwrap();
+        assert!(store.get_capture_state().unwrap().is_none());
     }
 
     #[test]

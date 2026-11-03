@@ -21,7 +21,7 @@ From `pigui/apps/pigui-gui/`:
 ```bash
 npm install
 npm run dev        # Vite only
-npm run tauri dev  # Tauri shell only; use scripts/run-dev.sh for the full app
+npm run tauri dev  # Tauri shell only; use scripts/run-dev.sh for the full app and dev helper
 npm run build      # production frontend build
 npm run check      # svelte-check
 ```
@@ -104,7 +104,10 @@ staple operation; do not rebuild unless the artifact actually changed.
 | Script | Purpose |
 |---|---|
 | `scripts/dev-env.sh` | Loads `.env` or `.env.example`, sets defaults, creates `var/` |
-| `scripts/run-dev.sh` | Starts and stops Snort + daemon + Tauri dev |
+| `scripts/run-dev.sh` | Starts the dev helper, daemon, and Tauri dev; capture goes through daemon -> helper |
+| `scripts/build-dev-helper.sh` | Builds the Swift dev helper and helperctl into `target/debug` |
+| `scripts/parity-check.sh` | Prints daemon, capture, helper, config-hash, and maintenance parity fields |
+| `scripts/test-packaged.sh` | Runs installed-bundle, SMAppService, optional capture, and parity checks against a packaged app |
 | `scripts/probe-snort.sh` | Prints resolved Snort capabilities |
 | `scripts/check-telemetry.sh` | Prints status, extractor size, DNS, and domains |
 
@@ -132,6 +135,13 @@ there is no mode variable.
 | `PIGUI_SNORT_PIDFILE` | `<log>/snort.pid` | Snort PID file |
 | `PIGUI_SNORT_CONTROL_SOCKET` | `var/run/snort.sock` | Reserved for planned control client |
 | `PIGUI_PROCESS_POLL_MS` | `1000` | Bootstrap `nettop` poll interval; the Settings tab value takes precedence once stored |
+| `PIGUI_HELPER_SERVICE` | `com.pigui.helper` | Helper Mach service name; dev uses `com.pigui.helper.dev` |
+| `PIGUI_HELPER_DEV` | unset | Set to `1` by `run-dev.sh` to use dev helper paths and skip code-sign checks |
+| `PIGUI_HELPER_STATE_ROOT` | app state root | Dev helper capture-state directory |
+| `PIGUI_HELPER_AUDIT` | `/Library/Logs/PIGUI/audit.log` | Dev helper audit log path |
+| `PIGUI_DEV_SNORT_BIN` | unset | Dev helper Snort binary |
+| `PIGUI_DEV_SNORT_CONFIG` | unset | Dev helper generated Snort config |
+| `PIGUI_DEV_SNORT_LOG_DIR` | unset | Dev helper Snort log directory |
 | `RUST_LOG` | `info` | Tracing filter |
 
 Relative paths are resolved against `PIGUI_HOME`.

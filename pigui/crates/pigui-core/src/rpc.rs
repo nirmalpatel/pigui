@@ -26,6 +26,10 @@ pub const METHOD_TLS_LIST: &str = "tls.list";
 pub const METHOD_HTTP_LIST: &str = "http.list";
 pub const METHOD_QUIC_LIST: &str = "quic.list";
 pub const METHOD_SNORT_STATUS: &str = "snort.status";
+pub const METHOD_CAPTURE_STATUS: &str = "capture.status";
+pub const METHOD_CAPTURE_START: &str = "capture.start";
+pub const METHOD_CAPTURE_STOP: &str = "capture.stop";
+pub const METHOD_CAPTURE_HELPER_STATUS: &str = "capture.helper_status";
 pub const METHOD_SETTINGS_GET: &str = "settings.get";
 pub const METHOD_SETTINGS_UPDATE: &str = "settings.update";
 pub const METHOD_SETTINGS_RESET: &str = "settings.reset";
@@ -114,6 +118,26 @@ pub struct ListQuery {
 
 pub type AlertsQuery = ListQuery;
 pub type DestinationsQuery = ListQuery;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureState {
+    pub interface: String,
+    pub snort_pid: Option<u32>,
+    pub log_dir: String,
+    pub mode: String,
+    pub started_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureStatusPayload {
+    pub capture: Option<CaptureState>,
+    pub helper: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureStartRequest {
+    pub interface: String,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableCount {
@@ -308,6 +332,14 @@ pub struct StatusPayload {
     pub snort_pid: Option<u32>,
     #[serde(default)]
     pub snort_interface: Option<String>,
+    #[serde(default)]
+    pub capture_running: bool,
+    #[serde(default)]
+    pub capture_interface: Option<String>,
+    #[serde(default)]
+    pub capture_mode: Option<String>,
+    #[serde(default)]
+    pub snort_config_hash: Option<String>,
     #[serde(default)]
     pub active_flows: u64,
     #[serde(default)]

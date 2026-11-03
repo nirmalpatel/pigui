@@ -4,10 +4,23 @@ import Security
 import SystemConfiguration
 
 private let helperVersion = "0.1.0"
-private let helperServiceName = "com.pigui.helper"
-private let stateRoot = "/Library/Application Support/PIGUI"
-private let auditDir = "/Library/Logs/PIGUI"
-private let auditPath = "/Library/Logs/PIGUI/audit.log"
+private let defaultServiceName = "com.pigui.helper"
+
+private func envValue(_ key: String) -> String? {
+    guard let value = ProcessInfo.processInfo.environment[key] else {
+        return nil
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+private func argumentValue(_ name: String) -> String? {
+    let arguments = CommandLine.arguments
+    guard let index = arguments.firstIndex(of: name), index + 1 < arguments.count else {
+        return nil
+    }
+    return arguments[index + 1]
+}
 
 @objc protocol PiguiHelperProtocol {
     func request(_ payload: String, withReply reply: @escaping (String) -> Void)
@@ -26,11 +39,31 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     private let fileManager = FileManager.default
     private var snortProcess: Process?
     private var snortLog: FileHandle?
+    private var snortPid: pid_t?
+    private var captureInterface: String?
+    private var captureLogDir: String?
+    private var captureStartedAt: Int?
     let isDevelopment: Bool
+    private let stateRoot: String
+    private let auditDir: String
+    private let auditPath: String
+    private let devSnortBinary: String?
+    private let devSnortConfig: String?
+    private let devLogDir: String?
 
     init(isDevelopment: Bool) {
         self.isDevelopment = isDevelopment
+        self.stateRoot = envValue("PIGUI_HELPER_STATE_ROOT")
+            ?? "/Library/Application Support/PIGUI"
+        self.auditPath = envValue("PIGUI_HELPER_AUDIT")
+            ?? "/Library/Logs/PIGUI/audit.log"
+        self.auditDir = URL(fileURLWithPath: self.auditPath)
+            .deletingLastPathComponent().path
+        self.devSnortBinary = envValue("PIGUI_DEV_SNORT_BIN")
+        self.devSnortConfig = envValue("PIGUI_DEV_SNORT_CONFIG")
+        self.devLogDir = envValue("PIGUI_DEV_SNORT_LOG_DIR")
         super.init()
+        restoreCaptureState()
     }
 
     func request(_ payload: String, withReply reply: @escaping (String) -> Void) {
@@ -80,7 +113,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func status() throws -> [String: Any] {
-        let running = snortProcess?.isRunning == true
+        let running = snortProcess?.isRunning == true || (snortPid.map(processAlive) ?? false)
         var data: [String: Any] = [
             "version": helperVersion,
             "uid": geteuid(),
@@ -88,9 +121,19 @@ final class HelperService: NSObject, PiguiHelperProtocol {
             "state_root": stateRoot,
             "audit_log": auditPath,
             "firewall_mode": "dry_run",
+            "development": isDevelopment,
         ]
-        if running {
-            data["snort_pid"] = snortProcess?.processIdentifier ?? 0
+        if let snortPid {
+            data["snort_pid"] = snortPid
+        }
+        if let captureInterface {
+            data["interface"] = captureInterface
+        }
+        if let captureLogDir {
+            data["log_dir"] = captureLogDir
+        }
+        if let captureStartedAt {
+            data["started_at"] = captureStartedAt
         }
         return ok(data: data)
     }
@@ -99,7 +142,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         guard geteuid() == 0 else {
             throw HelperError.message("capture requires root")
         }
-        guard snortProcess?.isRunning != true else {
+        guard snortProcess?.isRunning != true, !(snortPid.map(processAlive) ?? false) else {
             throw HelperError.message("capture is already running")
         }
         guard let interface = params["interface"] as? String,
@@ -111,17 +154,33 @@ final class HelperService: NSObject, PiguiHelperProtocol {
             throw HelperError.message("no console user is logged in")
         }
 
-        let payload = try stagePayload()
-        let snort = payload.appendingPathComponent("bin/snort")
-        let config = payload.appendingPathComponent("etc/snort.lua")
+        let snort: URL
+        let config: URL
+        let currentDirectory: URL
+        let payloadPath: String
+        if isDevelopment, let devSnortBinary, let devSnortConfig {
+            snort = URL(fileURLWithPath: devSnortBinary)
+            config = URL(fileURLWithPath: devSnortConfig)
+            currentDirectory = config.deletingLastPathComponent()
+            payloadPath = stateRoot
+        } else {
+            let payload = try stagePayload()
+            snort = payload.appendingPathComponent("bin/snort")
+            config = payload.appendingPathComponent("etc/snort.lua")
+            currentDirectory = payload.appendingPathComponent("etc")
+            payloadPath = payload.path
+        }
         guard fileManager.isExecutableFile(atPath: snort.path) else {
-            throw HelperError.message("staged Snort binary is missing")
+            throw HelperError.message("Snort binary is missing or not executable")
         }
         guard fileManager.fileExists(atPath: config.path) else {
-            throw HelperError.message("staged Snort config is missing")
+            throw HelperError.message("Snort config is missing")
         }
 
-        let logDir = try prepareLogDirectory(for: console)
+        let logDir = try prepareLogDirectory(
+            for: console,
+            override: isDevelopment ? devLogDir : nil
+        )
         let logPath = logDir.appendingPathComponent("snort.log")
         if !fileManager.fileExists(atPath: logPath.path) {
             fileManager.createFile(atPath: logPath.path, contents: nil)
@@ -134,7 +193,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
 
         let process = Process()
         process.executableURL = snort
-        process.currentDirectoryURL = payload.appendingPathComponent("etc")
+        process.currentDirectoryURL = currentDirectory
         process.arguments = [
             "-c", config.path,
             "-i", interface,
@@ -144,17 +203,29 @@ final class HelperService: NSObject, PiguiHelperProtocol {
             "-u", console.name,
             "-g", console.group,
         ]
-        process.environment = [
-            "HOME": console.home,
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "TMPDIR": NSTemporaryDirectory(),
-        ]
+        if isDevelopment {
+            var environment = ProcessInfo.processInfo.environment
+            environment["HOME"] = console.home
+            environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+            environment["TMPDIR"] = NSTemporaryDirectory()
+            process.environment = environment
+        } else {
+            process.environment = [
+                "HOME": console.home,
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "TMPDIR": NSTemporaryDirectory(),
+            ]
+        }
         process.standardOutput = log
         process.standardError = log
 
         try process.run()
         snortProcess = process
         snortLog = log
+        snortPid = process.processIdentifier
+        captureInterface = interface
+        captureLogDir = logDir.path
+        captureStartedAt = Int(Date().timeIntervalSince1970)
 
         let pidfile = logDir.appendingPathComponent("snort.pid")
         for _ in 0..<50 {
@@ -170,37 +241,54 @@ final class HelperService: NSObject, PiguiHelperProtocol {
             snortProcess = nil
             try? log.close()
             snortLog = nil
+            snortPid = nil
+            captureInterface = nil
+            captureLogDir = nil
+            captureStartedAt = nil
             throw HelperError.message("Snort exited during startup; see \(logDir.path)/snort.log")
         }
 
+        persistCaptureState()
         return ok(data: [
             "running": true,
             "pid": process.processIdentifier,
             "interface": interface,
             "user": console.name,
             "log_dir": logDir.path,
-            "payload": payload.path,
+            "payload": payloadPath,
         ])
     }
 
     private func disableCapture() throws -> [String: Any] {
-        guard let process = snortProcess else {
-            return ok(data: ["running": false])
+        if let process = snortProcess {
+            process.terminate()
+            let deadline = Date().addingTimeInterval(5)
+            while process.isRunning && Date() < deadline {
+                usleep(100_000)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+        } else if let snortPid, processAlive(snortPid) {
+            kill(snortPid, SIGTERM)
+            let deadline = Date().addingTimeInterval(5)
+            while processAlive(snortPid) && Date() < deadline {
+                usleep(100_000)
+            }
+            if processAlive(snortPid) {
+                kill(snortPid, SIGKILL)
+            }
         }
-
-        process.terminate()
-        let deadline = Date().addingTimeInterval(5)
-        while process.isRunning && Date() < deadline {
-            usleep(100_000)
-        }
-        if process.isRunning {
-            kill(process.processIdentifier, SIGKILL)
-        }
-        process.waitUntilExit()
 
         snortProcess = nil
         try? snortLog?.close()
         snortLog = nil
+        snortPid = nil
+        captureInterface = nil
+        captureLogDir = nil
+        captureStartedAt = nil
+        clearCaptureState()
         return ok(data: ["running": false])
     }
 
@@ -357,9 +445,67 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         )
     }
 
-    private func prepareLogDirectory(for user: ConsoleUser) throws -> URL {
-        let directory = URL(fileURLWithPath: user.home)
-            .appendingPathComponent("Library/Application Support/PIGUI/snort")
+    private func processAlive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private func captureStatePath() -> URL {
+        URL(fileURLWithPath: stateRoot).appendingPathComponent("capture.json")
+    }
+
+    private func persistCaptureState() {
+        guard let snortPid, let captureInterface, let captureLogDir, let captureStartedAt else {
+            return
+        }
+        let record: [String: Any] = [
+            "interface": captureInterface,
+            "pid": snortPid,
+            "log_dir": captureLogDir,
+            "started_at": captureStartedAt,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: record) else {
+            return
+        }
+        let path = captureStatePath()
+        try? fileManager.createDirectory(
+            atPath: URL(fileURLWithPath: stateRoot).path,
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: path)
+        _ = chown(path.path, 0, 0)
+        _ = chmod(path.path, 0o600)
+    }
+
+    private func clearCaptureState() {
+        try? fileManager.removeItem(at: captureStatePath())
+    }
+
+    private func restoreCaptureState() {
+        let path = captureStatePath()
+        guard let data = try? Data(contentsOf: path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let interface = object["interface"] as? String,
+              let pid = object["pid"] as? Int,
+              let logDir = object["log_dir"] as? String,
+              let startedAt = object["started_at"] as? Int
+        else {
+            return
+        }
+        let pidValue = pid_t(pid)
+        guard processAlive(pidValue) else {
+            clearCaptureState()
+            return
+        }
+        snortPid = pidValue
+        captureInterface = interface
+        captureLogDir = logDir
+        captureStartedAt = startedAt
+    }
+
+    private func prepareLogDirectory(for user: ConsoleUser, override: String?) throws -> URL {
+        let directory = override.map(URL.init(fileURLWithPath:))
+            ?? URL(fileURLWithPath: user.home)
+                .appendingPathComponent("Library/Application Support/PIGUI/snort")
         try fileManager.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
@@ -541,7 +687,10 @@ struct PiguiHelperMain {
 
         let service = HelperService(isDevelopment: development)
         let delegate = HelperListenerDelegate(service: service)
-        let listener = NSXPCListener(machServiceName: helperServiceName)
+        let serviceName = envValue("PIGUI_HELPER_SERVICE")
+            ?? argumentValue("--service")
+            ?? defaultServiceName
+        let listener = NSXPCListener(machServiceName: serviceName)
         listener.delegate = delegate
 
         let requirement = Bundle.main.object(

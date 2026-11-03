@@ -190,7 +190,7 @@ capture started, historical mappings cannot be reconstructed exactly.
 
 ## SQLite schema
 
-Schema version: `5`, stored in `schema_meta`.
+Schema version: `6`, stored in `schema_meta`.
 
 ### `alerts`
 
@@ -281,6 +281,12 @@ last_error`
 `key, value, updated_at`. PIGUI stores the validated settings document under
 the `app` key. The GUI reads and writes it through RPC, so the daemon remains
 the only process that opens the database.
+
+### `capture_state`
+
+One row (`id = 1`) stores the active capture interface, Snort PID, log
+directory, capture mode, and start time. The daemon uses the recorded interface
+for `nettop` process attribution and restores it across daemon restarts.
 
 ### Planned tables
 

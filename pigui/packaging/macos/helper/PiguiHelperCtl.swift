@@ -1,6 +1,14 @@
 import Foundation
 
-private let helperServiceName = "com.pigui.helper"
+private let defaultHelperServiceName = "com.pigui.helper"
+
+private func envValue(_ key: String) -> String? {
+    guard let value = ProcessInfo.processInfo.environment[key] else {
+        return nil
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
 
 @objc protocol PiguiHelperRemoteProtocol {
     func request(_ payload: String, withReply reply: @escaping (String) -> Void)
@@ -21,16 +29,19 @@ private func requestJSON(_ request: [String: Any]) -> String {
 }
 
 private func callHelper(_ request: [String: Any]) -> String {
+    let helperServiceName = envValue("PIGUI_HELPER_SERVICE") ?? defaultHelperServiceName
     let connection = NSXPCConnection(
         machServiceName: helperServiceName,
         options: .privileged
     )
     connection.remoteObjectInterface = NSXPCInterface(with: PiguiHelperRemoteProtocol.self)
-    let configured = Bundle.main.object(forInfoDictionaryKey: "PIGUIHelperRequirement") as? String
-    let requirement = configured?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    connection.setCodeSigningRequirement(
-        requirement.isEmpty ? "identifier \"com.pigui.helper\"" : requirement
-    )
+    if envValue("PIGUI_HELPER_DEV") != "1" {
+        let configured = Bundle.main.object(forInfoDictionaryKey: "PIGUIHelperRequirement") as? String
+        let requirement = configured?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        connection.setCodeSigningRequirement(
+            requirement.isEmpty ? "identifier \"com.pigui.helper\"" : requirement
+        )
+    }
     connection.resume()
     defer { connection.invalidate() }
 

@@ -88,6 +88,19 @@ export interface SnortCapabilities {
   warnings: string[];
 }
 
+export interface CaptureState {
+  interface: string;
+  snort_pid?: number;
+  log_dir: string;
+  mode: string;
+  started_at: number;
+}
+
+export interface CaptureStatusPayload {
+  capture?: CaptureState;
+  helper: unknown;
+}
+
 export interface StatusPayload {
   capabilities: SnortCapabilities;
   db_path: string;
@@ -103,6 +116,10 @@ export interface StatusPayload {
   snort_running: boolean;
   snort_pid?: number;
   snort_interface?: string;
+  capture_running: boolean;
+  capture_interface?: string;
+  capture_mode?: string;
+  snort_config_hash?: string;
   active_flows: number;
   active_processes: number;
   extractor_ingested: number;

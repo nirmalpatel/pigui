@@ -217,7 +217,8 @@ enclosing DMG. Otherwise launchd can reject the helper with
 
 An unsigned local build cannot complete this flow. It may return
 `Operation not permitted`. For development, use `scripts/run-dev.sh`, which
-runs Snort with `sudo` outside the packaged helper path.
+starts the same Swift helper in `--dev` mode through a temporary root
+LaunchDaemon, so capture still flows through GUI -> daemon -> helper -> Snort.
 
 Do not use `sfltool resetbtm` to clear a single app. It resets the whole
 background-task-management database and affects all apps. Use the PIGUI

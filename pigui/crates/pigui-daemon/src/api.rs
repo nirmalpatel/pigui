@@ -1,11 +1,14 @@
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use pigui_core::error::{Error, Result};
 use pigui_core::rpc::{
-    AlertList, ConnectionList, DestinationList, DestinationQuery, DnsList, DomainList, FlowList,
-    HealthPayload, HttpList, ListQuery, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST,
+    AlertList, CaptureStartRequest, CaptureState, CaptureStatusPayload, ConnectionList,
+    DestinationList, DestinationQuery, DnsList, DomainList, FlowList, HealthPayload, HttpList,
+    ListQuery, METHOD_ALERTS_LIST, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START,
+    METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
     METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST,
     METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
@@ -93,6 +96,10 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
         METHOD_SNORT_STATUS => {
             snort_status(state).and_then(|payload| Ok(serde_json::to_value(payload)?))
         }
+        METHOD_CAPTURE_STATUS => capture_status(state).await,
+        METHOD_CAPTURE_START => capture_start(state, request.params).await,
+        METHOD_CAPTURE_STOP => capture_stop(state).await,
+        METHOD_CAPTURE_HELPER_STATUS => capture_helper_status().await,
         METHOD_ALERTS_LIST => list_alerts(state, request.params),
         METHOD_DESTINATIONS_LIST => list_destinations(state, request.params),
         METHOD_DESTINATIONS_DETAIL => destination_detail(state, request.params),
@@ -152,6 +159,17 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         ))
     })?;
     let snort = pigui_snort::status::status(&state.config);
+    let capture = state.capture();
+    let capture_interface = capture.as_ref().map(|capture| capture.interface.clone());
+    let capture_mode = capture.as_ref().map(|capture| capture.mode.clone());
+    let config_path = state
+        .capabilities
+        .config_path
+        .as_deref()
+        .map(Path::new)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| state.config.snort_config_dir.join("snort.lua"));
+    let snort_config_hash = pigui_snort::config_gen::file_hash(&config_path);
     let extractor_metadata = std::fs::metadata(&state.config.extractor_json).ok();
     let extractor_size = extractor_metadata
         .as_ref()
@@ -185,7 +203,11 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         environment: state.config.environment.clone(),
         snort_running: snort.running,
         snort_pid: snort.pid,
-        snort_interface: snort.interface,
+        snort_interface: capture_interface.clone().or(snort.interface),
+        capture_running: capture.is_some(),
+        capture_interface,
+        capture_mode,
+        snort_config_hash,
         active_flows,
         active_processes,
         extractor_ingested,
@@ -201,6 +223,76 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         domain_count,
         collector_error: state.collector_error(),
     })
+}
+
+async fn capture_status(state: &AppState) -> Result<Value> {
+    let helper = capture_helper_status().await.unwrap_or(Value::Null);
+    let helper_running = helper
+        .pointer("/data/capture_running")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut capture = state.capture();
+    if capture.is_some() && !helper_running && !helper.is_null() {
+        query_store(state, |store| store.clear_capture_state())?;
+        state.set_capture(None);
+        capture = None;
+    }
+    Ok(serde_json::to_value(CaptureStatusPayload {
+        capture,
+        helper,
+    })?)
+}
+
+async fn capture_start(state: &AppState, params: Value) -> Result<Value> {
+    let request: CaptureStartRequest = serde_json::from_value(params)?;
+    let requested_interface = request.interface;
+    let helper_interface = requested_interface.clone();
+    let helper =
+        tokio::task::spawn_blocking(move || pigui_core::helper::enable_capture(&helper_interface))
+            .await
+            .map_err(|error| Error::Rpc(format!("capture helper task failed: {error}")))??;
+
+    let data = helper.get("data").cloned().unwrap_or(Value::Null);
+    let capture = CaptureState {
+        interface: data
+            .get("interface")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| requested_interface.clone()),
+        snort_pid: data
+            .get("pid")
+            .and_then(Value::as_u64)
+            .map(|value| value as u32),
+        log_dir: data
+            .get("log_dir")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        mode: if state.config.environment == "prod" {
+            "helper".to_string()
+        } else {
+            "dev-helper".to_string()
+        },
+        started_at: crate::store::unix_now(),
+    };
+    query_store(state, |store| store.save_capture_state(&capture))?;
+    state.set_capture(Some(capture.clone()));
+    Ok(serde_json::to_value(capture)?)
+}
+
+async fn capture_stop(state: &AppState) -> Result<Value> {
+    tokio::task::spawn_blocking(pigui_core::helper::disable_capture)
+        .await
+        .map_err(|error| Error::Rpc(format!("capture helper task failed: {error}")))??;
+    query_store(state, |store| store.clear_capture_state())?;
+    state.set_capture(None);
+    Ok(Value::from(true))
+}
+
+async fn capture_helper_status() -> Result<Value> {
+    tokio::task::spawn_blocking(pigui_core::helper::status)
+        .await
+        .map_err(|error| Error::Rpc(format!("capture helper task failed: {error}")))?
 }
 
 fn health(state: &AppState) -> Result<HealthPayload> {
@@ -223,11 +315,19 @@ fn health(state: &AppState) -> Result<HealthPayload> {
 
 fn snort_status(state: &AppState) -> Result<SnortStatusPayload> {
     let status = pigui_snort::status::status(&state.config);
+    let interface = state
+        .capture()
+        .map(|capture| capture.interface)
+        .or(status.interface);
     Ok(SnortStatusPayload {
         running: status.running,
         pid: status.pid,
-        interface: status.interface,
-        config_path: status.config_path,
+        interface,
+        config_path: state
+            .capabilities
+            .config_path
+            .clone()
+            .or(status.config_path),
         log_dir: status.log_dir,
         extractor_json: status.extractor_json,
         control_socket: status.control_socket,
