@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import pigIcon from "../../assets/pig.png";
   import type { AppSettings, StatusPayload, ThemeMode } from "../types";
 
   let {
@@ -91,7 +92,7 @@
 
 <header>
   <div class="brand">
-    <span class="logo">PI</span>
+    <img class="logo" src={pigIcon} alt="" aria-hidden="true" />
     <div>
       <h1>PIGUI</h1>
       <p>Snort telemetry, process attribution, and firewall control</p>
