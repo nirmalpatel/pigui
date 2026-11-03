@@ -3,8 +3,8 @@
 PIGUI separates presentation, ingestion, and privileged actions. Presentation
 and ingestion are unprivileged. The packaged helper is a narrow root XPC service
 that stages Snort into a root-owned payload, launches it, drops Snort to the
-console user, and exposes only allowlisted capture and dry-run firewall actions.
-Policy and PF enforcement remain planned.
+console user, and exposes only allowlisted capture and PIGUI-owned PF actions.
+Enforcement is opt-in. The policy engine remains planned.
 
 ## Privilege model
 
@@ -13,7 +13,7 @@ Policy and PF enforcement remain planned.
 | `PIGUI.app` | User | Reads daemon state over the Unix socket |
 | `pigui-daemon` | Unprivileged | Ingests logs, polls `nettop`, stores SQLite, serves RPC |
 | Snort | Root | Passive capture through BPF; writes telemetry files |
-| `pigui-helper` | Root | SMAppService LaunchDaemon; XPC; staged payload; audit; dry-run firewall |
+| `pigui-helper` | Root | SMAppService LaunchDaemon; XPC; staged payload; audit; PF anchor/table/pflog actions |
 | OS collectors | Daemon thread | Run as the daemon user; attribution is best-effort |
 
 The daemon is deliberately unprivileged. Do not describe or deploy it as a root
@@ -98,7 +98,8 @@ Requirements:
 - Windows will use named pipes with ACLs. Planned.
 - Rule changes and firewall actions are always audited. Privileged helper
   actions are audited now; rule changes are planned.
-- Enforcement is dry-run by default. Implemented.
+- Enforcement is off by default and uses a PIGUI-owned PF anchor. Implemented in
+  the helper and daemon RPC; GUI wiring is planned.
 - Distribution builds are signed and notarized. Planned; packaging supports it.
 - Helper installation uses SMAppService, not ad-hoc privilege escalation.
   Implemented.
@@ -149,7 +150,7 @@ Requirements:
 - Activation is atomic.
 - A failed reload restores the last known good bundle.
 - Every rule change is audited.
-- The first release defaults to alert-only and dry-run enforcement.
+- The first release defaults to alert-only; firewall enforcement is opt-in.
 - A custom DSL, if added, must compile to Snort rules before activation.
 
 Planned policy actions:
@@ -168,16 +169,25 @@ current code.
 
 ## Firewall enforcement
 
-Status: **planned**. The `pigui-firewall` crate currently contains types, a
-dry-run backend, and a PF placeholder that returns `NotImplemented`.
+Status: **partial**. The `pigui-firewall` crate contains the rule/block models,
+validation, and a PF rule compiler. The daemon stores firewall rules, dynamic
+blocks, state, events, and audit records. The root helper can validate, apply
+rules to PIGUI-owned PF anchors, add/remove dynamic table entries, read label
+counters, and collect recent pflog events. Daemon RPC, reconciliation, and TTL
+sweeping exist; UI wiring, event persistence, and the remaining enforcement
+safety controls are still planned.
 
-macOS plan:
+macOS implementation:
 
-- Own a PF anchor and table.
+- Own `com.apple/000.pigui` for block/reject rules and
+  `com.apple/300.pigui.allow` for allow rules.
+- Use `com.apple/000.pigui` so blocks run before Apple's
+  `200.AirDrop` and `250.ApplicationFirewall` anchors.
 - Do not rewrite the system-wide `pf.conf`.
-- Prefer table-based IP blocking for fast updates.
+- Use PIGUI-owned tables for dynamic IPv4/IPv6 blocks.
+- Direct logs to a dedicated `pflog1` interface.
 - Apply TTLs and maximum table sizes.
-- Record every action in the audit log.
+- Record every action in the helper audit log.
 
 Linux plan:
 

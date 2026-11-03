@@ -23,7 +23,7 @@ processes.
 | Signals | Reload, stats dump, rotate, shutdown | Planned |
 | `perf_monitor` | Base/CPU/flow aggregates | Planned |
 | `host_cache` / RNA | Host services, OS awareness | Planned |
-| PF/firewall state | Blocks, TTLs, audit | Planned |
+| PF/firewall state | Rules, blocks, TTLs, audit | Partial: storage and compiler implemented; enforcement planned |
 
 Snort sees packets and flows, not processes. Alerts alone do not show all
 outgoing traffic. PIGUI therefore consumes extractor `conn` records and polls
@@ -209,7 +209,7 @@ capture started, historical mappings cannot be reconstructed exactly.
 
 ## SQLite schema
 
-Schema version: `6`, stored in `schema_meta`.
+Schema version: `7`, stored in `schema_meta`.
 
 ### `alerts`
 
@@ -308,10 +308,39 @@ One row (`id = 1`) stores the active capture interface, Snort PID, log
 directory, capture mode, and start time. The daemon uses the recorded interface
 for `nettop` process attribution and restores it across daemon restarts.
 
+### Firewall tables
+
+`firewall_rules`: user-managed PF rules with `id, name, enabled, action,
+direction, protocol, local_address, local_port, remote_address, remote_port,
+interface, log, priority, created_at, updated_at`. `action` is `allow`,
+`block`, or `reject`; `direction` is `in`, `out`, or `both`.
+
+`firewall_state`: one row (`id = 1`) with `enabled, mode, generation,
+applied_generation, applied_at, last_error, pf_enabled_by_pigui, updated_at`.
+`generation` increments on rule or mode changes; `applied_generation` records
+the last successfully applied ruleset.
+
+`firewall_blocks`: dynamic IP/CIDR blocks with `address, direction, ttl_secs,
+reason, source, created_at, expires_at`. Address and direction are unique so
+re-adding a block extends its expiry.
+
+`firewall_events`: reserved for persisted PF log records (`ts, rule_id,
+rule_label, action, direction, interface, proto, src, dst, src_port, dst_port,
+raw`). The helper currently keeps the last 1000 events in memory and the daemon
+returns them through `firewall.events.list`; persisting them into this table is
+planned.
+
+`firewall_audit`: reserved for daemon-side firewall action history (`ts, actor,
+action, rule_id, detail, result, error`). Helper actions are currently audited
+in `/Library/Logs/PIGUI/audit.log`.
+
+The compiler, storage, helper execution, daemon RPC, reconciliation, and TTL
+sweeping exist. Event persistence and the Firewall tab are planned.
+
 ### Planned tables
 
-The original design also listed `firewall_actions`, `rule_bundles`,
-`sensor_stats`, and `audit_log`. These are **not** in the current schema.
+`rule_bundles`, `sensor_stats`, and the generic `audit_log` remain **not** in the
+current schema.
 
 ## Retention
 

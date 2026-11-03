@@ -11,6 +11,31 @@ private let helperVersion: String = {
     return trimmed.isEmpty ? "dev" : trimmed
 }()
 private let defaultServiceName = "com.pigui.helper"
+private let pfctlPath = "/sbin/pfctl"
+private let ifconfigPath = "/sbin/ifconfig"
+private let tcpdumpPath = "/usr/sbin/tcpdump"
+private let blockAnchor = "com.apple/000.pigui"
+private let allowAnchor = "com.apple/300.pigui.allow"
+private let blockAnchorSuffix = "000.pigui"
+private let allowAnchorSuffix = "300.pigui.allow"
+private let pflogInterface = "pflog1"
+private let dynamicBlockTables = [
+    "pigui_block4_in",
+    "pigui_block4_out",
+    "pigui_block6_in",
+    "pigui_block6_out",
+]
+private let maxFirewallRulesBytes = 256 * 1024
+
+private struct CommandResult {
+    let status: Int32
+    let stdout: String
+    let stderr: String
+
+    var combined: String {
+        stdout + stderr
+    }
+}
 
 private func envValue(_ key: String) -> String? {
     guard let value = ProcessInfo.processInfo.environment[key] else {
@@ -56,6 +81,21 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     private let devSnortBinary: String?
     private let devSnortConfig: String?
     private let devLogDir: String?
+    private var firewallGeneration = 0
+    private var firewallAppliedAt: Int?
+    private var firewallPFEnabledByPigui = false
+    private var firewallPFToken: String?
+    private var firewallPflogCreated = false
+    private var firewallBlockLabels: [String] = []
+    private var firewallAllowLabels: [String] = []
+    private var firewallLastError: String?
+    private var pflogProcess: Process?
+    private var pflogPipe: Pipe?
+    private var pflogLineBuffer = ""
+    private var pflogBuffer: [[String: Any]] = []
+    private var pflogReaderActive = false
+    private let pflogLock = NSLock()
+    private let pflogBufferLimit = 1000
 
     init(isDevelopment: Bool) {
         self.isDevelopment = isDevelopment
@@ -70,6 +110,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         self.devLogDir = envValue("PIGUI_DEV_SNORT_LOG_DIR")
         super.init()
         restoreCaptureState()
+        restoreFirewallState()
     }
 
     func request(_ payload: String, withReply reply: @escaping (String) -> Void) {
@@ -80,7 +121,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func handle(_ payload: String) -> String {
-        guard payload.utf8.count <= 64 * 1024 else {
+        guard payload.utf8.count <= 512 * 1024 else {
             return encode(["ok": false, "error": "request too large"])
         }
         guard let data = payload.data(using: .utf8),
@@ -107,12 +148,31 @@ final class HelperService: NSObject, PiguiHelperProtocol {
                 result = try flushFirewall()
             case "apply_block":
                 result = try applyBlock(params: params)
+            case "firewall_status":
+                result = try firewallStatus()
+            case "firewall_apply":
+                result = try firewallApply(params: params)
+            case "firewall_flush":
+                result = try firewallFlush(params: params)
+            case "firewall_block":
+                result = try firewallBlock(params: params)
+            case "firewall_unblock":
+                result = try firewallUnblock(params: params)
+            case "firewall_counters":
+                result = try firewallCounters()
+            case "firewall_events":
+                result = try firewallEvents(params: params)
             default:
                 result = encode(ok: false, error: "unknown method: \(method)")
             }
         } catch {
-            debugLog("method \(method) failed: \(error)")
-            result = encode(ok: false, error: "\(error)")
+            let message = "\(error)"
+            debugLog("method \(method) failed: \(message)")
+            if method.hasPrefix("firewall_") {
+                firewallLastError = message
+                persistFirewallState()
+            }
+            result = encode(ok: false, error: message)
         }
 
         audit(method: method, params: redact(params: params), result: result)
@@ -127,7 +187,9 @@ final class HelperService: NSObject, PiguiHelperProtocol {
             "capture_running": running,
             "state_root": stateRoot,
             "audit_log": auditPath,
-            "firewall_mode": "dry_run",
+            "firewall_mode": "pf",
+            "firewall_generation": firewallGeneration,
+            "pf_enabled_by_pigui": firewallPFEnabledByPigui,
             "development": isDevelopment,
         ]
         if let snortPid {
@@ -302,22 +364,861 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func flushFirewall() throws -> [String: Any] {
-        ok(data: ["dry_run": true, "flushed": 0])
+        try firewallFlush(params: ["disable_pf": false])
     }
 
     private func applyBlock(params: [String: Any]) throws -> [String: Any] {
-        guard let address = params["ip"] as? String,
+        var request = params
+        if request["address"] == nil {
+            request["address"] = request["ip"]
+        }
+        return try firewallBlock(params: request)
+    }
+
+    private func firewallStatus() throws -> [String: Any] {
+        ok(data: try firewallStatusData())
+    }
+
+    private func firewallStatusData() throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall inspection requires root")
+        }
+        let pf = try pfStatus()
+        var data: [String: Any] = [
+            "pf_enabled": pf.enabled,
+            "block_anchor": blockAnchor,
+            "allow_anchor": allowAnchor,
+            "block_anchor_loaded": anchorHasRules(blockAnchor),
+            "allow_anchor_loaded": anchorHasRules(allowAnchor),
+            "generation": firewallGeneration,
+            "pf_enabled_by_pigui": firewallPFEnabledByPigui,
+            "pflog_interface": pflogInterface,
+            "pflog_ready": pflogReady(),
+            "pflog_reader_running": pflogProcess?.isRunning == true,
+            "pflog_created_by_pigui": firewallPflogCreated,
+            "block_rule_count": firewallBlockLabels.count,
+            "allow_rule_count": firewallAllowLabels.count,
+        ]
+        if let firewallAppliedAt {
+            data["applied_at"] = firewallAppliedAt
+        }
+        if let firewallLastError {
+            data["last_error"] = firewallLastError
+        }
+        return data
+    }
+
+    private func firewallApply(params: [String: Any]) throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall changes require root")
+        }
+        guard let blockRules = params["block_rules"] as? String,
+              let allowRules = params["allow_rules"] as? String
+        else {
+            throw HelperError.message("block_rules and allow_rules are required")
+        }
+        let generation = params["generation"] as? Int ?? 0
+        let enablePF = params["enable_pf"] as? Bool ?? true
+
+        try validateFirewallRules(
+            blockRules,
+            name: "block",
+            allowPass: false,
+            allowTables: true
+        )
+        try validateFirewallRules(
+            allowRules,
+            name: "allow",
+            allowPass: true,
+            allowTables: false
+        )
+        _ = try ensurePFEnabled(enablePF)
+        try ensurePflogInterface()
+
+        let blockFile = try writeRulesFile(blockRules, name: "block")
+        let allowFile = try writeRulesFile(allowRules, name: "allow")
+        defer {
+            try? fileManager.removeItem(at: blockFile)
+            try? fileManager.removeItem(at: allowFile)
+        }
+
+        try applyAnchor(blockAnchor, file: blockFile)
+        try applyAnchor(allowAnchor, file: allowFile)
+
+        pflogLock.lock()
+        firewallBlockLabels = ruleLabels(from: blockRules)
+        firewallAllowLabels = ruleLabels(from: allowRules)
+        pflogLock.unlock()
+        firewallGeneration = generation
+        firewallAppliedAt = Int(Date().timeIntervalSince1970)
+        firewallLastError = nil
+        persistFirewallState()
+        return ok(data: try firewallStatusData())
+    }
+
+    private func firewallFlush(params: [String: Any]) throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall changes require root")
+        }
+        let disablePF = params["disable_pf"] as? Bool ?? false
+
+        flushAnchor(blockAnchor)
+        flushAnchor(allowAnchor)
+        flushDynamicTables()
+        stopPflogReader()
+        if firewallPflogCreated {
+            _ = try? runCommand(ifconfigPath, [pflogInterface, "destroy"])
+            firewallPflogCreated = false
+        }
+
+        firewallLastError = nil
+        if disablePF {
+            if let token = firewallPFToken {
+                let result = try runCommand(pfctlPath, ["-X", token])
+                if result.status != 0 {
+                    throw HelperError.message(
+                        "could not release PF reference: \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
+                    )
+                }
+                firewallPFToken = nil
+            } else if firewallPFEnabledByPigui {
+                firewallLastError = "PF release token is missing"
+            }
+            firewallPFEnabledByPigui = false
+        }
+
+        firewallGeneration = 0
+        firewallAppliedAt = Int(Date().timeIntervalSince1970)
+        pflogLock.lock()
+        firewallBlockLabels = []
+        firewallAllowLabels = []
+        pflogLock.unlock()
+        persistFirewallState()
+        return ok(data: try firewallStatusData())
+    }
+
+    private func firewallBlock(params: [String: Any]) throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall changes require root")
+        }
+        guard let address = (params["address"] as? String) ?? (params["ip"] as? String),
               validateAddress(address)
         else {
             throw HelperError.message("invalid IP or CIDR")
         }
+        guard let direction = normalizedDirection(params["direction"] as? String) else {
+            throw HelperError.message("invalid block direction")
+        }
+        let tables = tablesFor(address: address, direction: direction)
+        guard !tables.isEmpty else {
+            throw HelperError.message("invalid IP or CIDR")
+        }
+        for table in tables {
+            let result = try runCommand(
+                pfctlPath,
+                ["-a", blockAnchor, "-t", table, "-T", "add", address]
+            )
+            if result.status != 0 {
+                throw HelperError.message(
+                    "pfctl table add failed for \(table): \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
+                )
+            }
+        }
         return ok(data: [
-            "dry_run": true,
-            "outcome": "would_block",
-            "ip": address,
-            "direction": params["direction"] as? String ?? "both",
+            "address": address,
+            "direction": direction,
+            "tables": tables,
             "ttl_secs": params["ttl_secs"] as? Int ?? 0,
+            "pf_enabled": try pfStatus().enabled,
         ])
+    }
+
+    private func firewallUnblock(params: [String: Any]) throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall changes require root")
+        }
+        guard let address = (params["address"] as? String) ?? (params["ip"] as? String),
+              validateAddress(address)
+        else {
+            throw HelperError.message("invalid IP or CIDR")
+        }
+        guard let direction = normalizedDirection(params["direction"] as? String) else {
+            throw HelperError.message("invalid block direction")
+        }
+        let tables = tablesFor(address: address, direction: direction)
+        for table in tables {
+            _ = try? runCommand(
+                pfctlPath,
+                ["-a", blockAnchor, "-t", table, "-T", "delete", address]
+            )
+        }
+        return ok(data: [
+            "address": address,
+            "direction": direction,
+            "tables": tables,
+        ])
+    }
+
+    private func firewallCounters() throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall inspection requires root")
+        }
+        return ok(data: [
+            "block": try countersForAnchor(blockAnchor),
+            "allow": try countersForAnchor(allowAnchor),
+        ])
+    }
+
+    private func firewallEvents(params: [String: Any]) throws -> [String: Any] {
+        guard geteuid() == 0 else {
+            throw HelperError.message("firewall inspection requires root")
+        }
+        let requested = params["limit"] as? Int ?? 100
+        let limit = max(1, min(requested, 500))
+        let clear = params["clear"] as? Bool ?? true
+        try ensurePflogInterface()
+
+        pflogLock.lock()
+        let count = min(limit, pflogBuffer.count)
+        let events = Array(pflogBuffer.prefix(count))
+        if clear {
+            pflogBuffer.removeFirst(count)
+        }
+        let readerRunning = pflogProcess?.isRunning == true
+        pflogLock.unlock()
+
+        return ok(data: [
+            "events": events,
+            "pflog_interface": pflogInterface,
+            "pflog_reader_running": readerRunning,
+        ])
+    }
+
+    private func runCommand(
+        _ executable: String,
+        _ arguments: [String],
+        stdin: String? = nil,
+        timeout: TimeInterval? = nil
+    ) throws -> CommandResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        var inputPipe: Pipe?
+        if stdin != nil {
+            let pipe = Pipe()
+            process.standardInput = pipe
+            inputPipe = pipe
+        }
+        try process.run()
+        if let stdin, let inputPipe {
+            inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            try? inputPipe.fileHandleForWriting.close()
+        }
+        if let timeout {
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning && Date() < deadline {
+                usleep(20_000)
+            }
+            if process.isRunning {
+                process.terminate()
+                usleep(100_000)
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
+            }
+        }
+        process.waitUntilExit()
+        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+        return CommandResult(
+            status: process.terminationStatus,
+            stdout: String(data: outData, encoding: .utf8) ?? "",
+            stderr: String(data: errData, encoding: .utf8) ?? ""
+        )
+    }
+
+    private func commandStatus(_ executable: String, _ arguments: [String]) -> Int32 {
+        guard let result = try? runCommand(executable, arguments) else {
+            return -1
+        }
+        return result.status
+    }
+
+    private func writeRulesFile(_ text: String, name: String) throws -> URL {
+        let directory = URL(fileURLWithPath: stateRoot).appendingPathComponent("firewall")
+        do {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            throw HelperError.message("could not create firewall directory: \(error)")
+        }
+        let url = directory.appendingPathComponent("\(name)-\(UUID().uuidString).pf")
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            throw HelperError.message("could not write firewall rules: \(error)")
+        }
+        _ = chmod(url.path, 0o600)
+        return url
+    }
+
+    private func validateFirewallRules(
+        _ text: String,
+        name: String,
+        allowPass: Bool,
+        allowTables: Bool
+    ) throws {
+        guard !text.isEmpty, text.utf8.count <= maxFirewallRulesBytes else {
+            throw HelperError.message("\(name) rules are empty or too large")
+        }
+        guard text.contains("# PIGUI managed") else {
+            throw HelperError.message("\(name) rules are missing the PIGUI header")
+        }
+        let lower = text.lowercased()
+        if lower.contains("include ") || lower.contains("load anchor") || text.contains("\0") {
+            throw HelperError.message("\(name) rules contain a forbidden directive")
+        }
+        try validatePiguiRuleLines(
+            text,
+            name: name,
+            allowPass: allowPass,
+            allowTables: allowTables
+        )
+        let file = try writeRulesFile(text, name: name)
+        defer { try? fileManager.removeItem(at: file) }
+        let result = try runCommand(pfctlPath, ["-nf", file.path])
+        if result.status != 0 {
+            throw HelperError.message(
+                "pfctl rejected \(name) rules: \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
+            )
+        }
+    }
+
+    private func validatePiguiRuleLines(
+        _ text: String,
+        name: String,
+        allowPass: Bool,
+        allowTables: Bool
+    ) throws {
+        let allowedTables: Set<String> = [
+            "table <pigui_block4_in> persist",
+            "table <pigui_block4_out> persist",
+            "table <pigui_block6_in> persist",
+            "table <pigui_block6_out> persist",
+        ]
+        let forbidden = [
+            "anchor ",
+            "binat",
+            "dummynet",
+            "dup-to",
+            "include ",
+            "load ",
+            "nat ",
+            "queue ",
+            "rdr ",
+            "reply-to",
+            "route ",
+            "scrub ",
+        ]
+        for rawLine in text.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") {
+                continue
+            }
+            if allowedTables.contains(line) {
+                guard allowTables else {
+                    throw HelperError.message("\(name) rules must not declare PF tables")
+                }
+                continue
+            }
+            let isPass = line.hasPrefix("pass ")
+            let isBlock = line.hasPrefix("block drop ") || line.hasPrefix("block return ")
+            guard isPass || isBlock else {
+                throw HelperError.message("\(name) rules contain an unsupported directive: \(line)")
+            }
+            guard allowPass == isPass else {
+                throw HelperError.message("\(name) rules contain a rule in the wrong anchor: \(line)")
+            }
+            guard line.contains("label \"pigui-") else {
+                throw HelperError.message("\(name) rules must use a PIGUI label: \(line)")
+            }
+            let lower = line.lowercased()
+            if let match = forbidden.first(where: { lower.contains($0) }) {
+                throw HelperError.message("\(name) rules contain a forbidden keyword \(match): \(line)")
+            }
+        }
+    }
+
+    private func pfStatus() throws -> (enabled: Bool, text: String) {
+        let result = try runCommand(pfctlPath, ["-s", "info"])
+        let text = result.combined
+        return (text.contains("Status: Enabled"), text)
+    }
+
+    private func parsePFToken(_ text: String) -> String? {
+        for line in text.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("Token") else {
+                continue
+            }
+            guard let colon = trimmed.firstIndex(of: ":") else {
+                continue
+            }
+            let token = String(trimmed[trimmed.index(after: colon)...])
+                .trimmingCharacters(in: .whitespaces)
+            return token.isEmpty ? nil : token
+        }
+        return nil
+    }
+
+    private func ensurePFEnabled(_ enable: Bool) throws -> Bool {
+        let current = try pfStatus()
+        if current.enabled {
+            return true
+        }
+        firewallPFToken = nil
+        firewallPFEnabledByPigui = false
+        guard enable else {
+            return false
+        }
+        let result = try runCommand(pfctlPath, ["-E"])
+        if result.status != 0 {
+            throw HelperError.message(
+                "could not enable PF: \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
+            )
+        }
+        guard let token = parsePFToken(result.combined) else {
+            _ = try? runCommand(pfctlPath, ["-d"])
+            throw HelperError.message("PF enabled but no release token was returned")
+        }
+        firewallPFToken = token
+        firewallPFEnabledByPigui = true
+        return true
+    }
+
+    private func pflogReady() -> Bool {
+        commandStatus(ifconfigPath, [pflogInterface]) == 0
+    }
+
+    private func ensurePflogInterface() throws {
+        if !pflogReady() {
+            let result = try runCommand(ifconfigPath, [pflogInterface, "create"])
+            if result.status != 0 {
+                throw HelperError.message(
+                    "could not create \(pflogInterface): \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
+                )
+            }
+            firewallPflogCreated = true
+            persistFirewallState()
+        }
+        startPflogReader()
+    }
+
+    private func startPflogReader() {
+        if let process = pflogProcess, process.isRunning {
+            return
+        }
+        pflogPipe?.fileHandleForReading.readabilityHandler = nil
+        pflogLock.lock()
+        pflogReaderActive = false
+        pflogLock.unlock()
+        pflogProcess = nil
+        pflogPipe = nil
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tcpdumpPath)
+        process.arguments = ["-n", "-e", "-tt", "-l", "-i", pflogInterface]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            debugLog("could not start pflog reader: \(error)")
+            return
+        }
+
+        pflogProcess = process
+        pflogPipe = pipe
+        pflogLock.lock()
+        pflogReaderActive = true
+        pflogLock.unlock()
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            self?.appendPflogData(data)
+        }
+    }
+
+    private func stopPflogReader() {
+        pflogPipe?.fileHandleForReading.readabilityHandler = nil
+        pflogPipe = nil
+        if let process = pflogProcess {
+            if process.isRunning {
+                process.terminate()
+                let deadline = Date().addingTimeInterval(1)
+                while process.isRunning && Date() < deadline {
+                    usleep(20_000)
+                }
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
+            }
+            process.waitUntilExit()
+        }
+        pflogProcess = nil
+        pflogLock.lock()
+        pflogReaderActive = false
+        pflogLineBuffer = ""
+        pflogBuffer.removeAll()
+        pflogLock.unlock()
+    }
+
+    private func appendPflogData(_ data: Data) {
+        guard let text = String(data: data, encoding: .utf8) else {
+            return
+        }
+        pflogLock.lock()
+        guard pflogReaderActive else {
+            pflogLock.unlock()
+            return
+        }
+        pflogLineBuffer.append(text)
+        while let newline = pflogLineBuffer.firstIndex(of: "\n") {
+            let line = String(pflogLineBuffer[..<newline])
+            pflogLineBuffer.removeSubrange(pflogLineBuffer.startIndex...newline)
+            if let event = parsePflogLine(
+                line,
+                blockLabels: firewallBlockLabels,
+                allowLabels: firewallAllowLabels
+            ) {
+                pflogBuffer.append(event)
+                if pflogBuffer.count > pflogBufferLimit {
+                    pflogBuffer.removeFirst(pflogBuffer.count - pflogBufferLimit)
+                }
+            }
+        }
+        pflogLock.unlock()
+    }
+
+    private func applyAnchor(_ anchor: String, file: URL) throws {
+        let result = try runCommand(pfctlPath, ["-a", anchor, "-f", file.path])
+        if result.status != 0 {
+            throw HelperError.message(
+                "pfctl apply failed for \(anchor): \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
+            )
+        }
+    }
+
+    private func flushAnchor(_ anchor: String) {
+        _ = try? runCommand(pfctlPath, ["-a", anchor, "-F", "all"])
+        _ = try? runCommand(pfctlPath, ["-a", anchor, "-f", "/dev/null"])
+    }
+
+    private func flushDynamicTables() {
+        for table in dynamicBlockTables {
+            _ = try? runCommand(
+                pfctlPath,
+                ["-a", blockAnchor, "-t", table, "-T", "flush"]
+            )
+        }
+    }
+
+    private func anchorHasRules(_ anchor: String) -> Bool {
+        guard let result = try? runCommand(pfctlPath, ["-a", anchor, "-sr"]) else {
+            return false
+        }
+        return result.status == 0
+            && !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func ruleLabels(from text: String) -> [String] {
+        var labels: [String] = []
+        for line in text.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("table ") {
+                continue
+            }
+            if let label = extractLabel(trimmed) {
+                labels.append(label)
+            }
+        }
+        return labels
+    }
+
+    private func extractLabel(_ line: String) -> String? {
+        guard let range = line.range(of: "label \"") else {
+            return nil
+        }
+        let rest = line[range.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else {
+            return nil
+        }
+        return String(rest[..<end])
+    }
+
+    private func countersForAnchor(_ anchor: String) throws -> [[String: Any]] {
+        let result = try runCommand(pfctlPath, ["-a", anchor, "-vs", "labels"])
+        guard result.status == 0 else {
+            return []
+        }
+        var counters: [[String: Any]] = []
+        for line in result.combined.split(separator: "\n") {
+            let parts = line
+                .split(whereSeparator: { $0 == " " || $0 == "\t" })
+                .map(String.init)
+            guard parts.count >= 8, parts[0].hasPrefix("pigui-") else {
+                continue
+            }
+            counters.append([
+                "anchor": anchor,
+                "label": parts[0],
+                "evaluations": Int(parts[1]) ?? 0,
+                "packets": Int(parts[2]) ?? 0,
+                "bytes": Int(parts[3]) ?? 0,
+                "packets_in": Int(parts[4]) ?? 0,
+                "bytes_in": Int(parts[5]) ?? 0,
+                "packets_out": Int(parts[6]) ?? 0,
+                "bytes_out": Int(parts[7]) ?? 0,
+            ])
+        }
+        return counters
+    }
+
+    private func parsePflogLine(
+        _ raw: String,
+        blockLabels: [String],
+        allowLabels: [String]
+    ) -> [String: Any]? {
+        guard let matchRange = raw.range(of: "(match):") else {
+            return nil
+        }
+        let header = String(raw[..<matchRange.lowerBound])
+        let detail = String(raw[matchRange.upperBound...])
+            .trimmingCharacters(in: .whitespaces)
+
+        var timestamp = 0
+        if let first = header.split(separator: " ", maxSplits: 1).first {
+            timestamp = Int(Double(String(first)) ?? 0)
+        }
+
+        let anchors = [
+            (blockAnchorSuffix, blockLabels),
+            (allowAnchorSuffix, allowLabels),
+        ]
+        var anchorName = ""
+        var ruleNumber = -1
+        var ruleLabel: String?
+        for (suffix, labels) in anchors {
+            guard let range = header.range(of: suffix) else {
+                continue
+            }
+            anchorName = suffix
+            let after = String(header[range.upperBound...])
+            let cleaned = after.drop(while: { $0 == "." || $0 == "/" || $0 == " " })
+            let numberText = cleaned.prefix(while: { $0.isNumber })
+            if let number = Int(numberText) {
+                ruleNumber = number
+                if number >= 0, number < labels.count {
+                    ruleLabel = labels[number]
+                }
+            }
+            break
+        }
+        if anchorName.isEmpty {
+            return nil
+        }
+
+        let actionParts = detail
+            .split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            .map(String.init)
+        let action = actionParts.first ?? ""
+        let direction = actionParts.count > 1 ? actionParts[1] : ""
+
+        var interface: String?
+        var src = ""
+        var dst = ""
+        var srcPort: Int?
+        var dstPort: Int?
+        var proto = ""
+
+        if let onRange = detail.range(of: " on "),
+           let arrow = detail.range(of: " > ", range: onRange.upperBound..<detail.endIndex)
+        {
+            let afterOn = detail[onRange.upperBound...]
+            if let colon = afterOn.firstIndex(of: ":") {
+                interface = String(afterOn[..<colon])
+                    .trimmingCharacters(in: .whitespaces)
+                let endpointStart = afterOn.index(after: colon)
+                let left = String(detail[endpointStart..<arrow.lowerBound])
+                    .trimmingCharacters(in: .whitespaces)
+                (src, srcPort) = parseEndpoint(left)
+                let right = String(detail[arrow.upperBound...])
+                if let protoSplit = right.range(of: ": ") {
+                    let endpoint = String(right[..<protoSplit.lowerBound])
+                        .trimmingCharacters(in: .whitespaces)
+                    (dst, dstPort) = parseEndpoint(endpoint)
+                    let protoText = String(right[protoSplit.upperBound...])
+                        .split(separator: ",")
+                        .first
+                        .map(String.init) ?? ""
+                    proto = protoText.trimmingCharacters(in: .whitespaces)
+                } else {
+                    (dst, dstPort) = parseEndpoint(right)
+                }
+            }
+        }
+
+        var event: [String: Any] = [
+            "ts": timestamp,
+            "anchor": "com.apple/\(anchorName)",
+            "rule_number": ruleNumber,
+            "action": action,
+            "direction": direction,
+            "raw": raw,
+        ]
+        if let ruleLabel {
+            event["rule_label"] = ruleLabel
+        }
+        if let interface, !interface.isEmpty {
+            event["interface"] = interface
+        }
+        if !src.isEmpty {
+            event["src"] = src
+        }
+        if !dst.isEmpty {
+            event["dst"] = dst
+        }
+        if let srcPort {
+            event["src_port"] = srcPort
+        }
+        if let dstPort {
+            event["dst_port"] = dstPort
+        }
+        if !proto.isEmpty {
+            event["proto"] = proto
+        }
+        return event
+    }
+
+    private func parseEndpoint(_ value: String) -> (String, Int?) {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard let dot = trimmed.lastIndex(of: ".") else {
+            return (trimmed, nil)
+        }
+        let portText = String(trimmed[trimmed.index(after: dot)...])
+        guard let port = Int(portText) else {
+            return (trimmed, nil)
+        }
+        return (String(trimmed[..<dot]), port)
+    }
+
+    private func addressFamily(_ value: String) -> Int32? {
+        let address = String(
+            value.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        )
+        var v4 = in_addr()
+        var v6 = in6_addr()
+        if address.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
+            return AF_INET
+        }
+        if address.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 {
+            return AF_INET6
+        }
+        return nil
+    }
+
+    private func normalizedDirection(_ value: String?) -> String? {
+        switch (value ?? "both").lowercased() {
+        case "in", "inbound":
+            return "in"
+        case "out", "outbound":
+            return "out"
+        case "both":
+            return "both"
+        default:
+            return nil
+        }
+    }
+
+    private func tablesFor(address: String, direction: String) -> [String] {
+        guard let family = addressFamily(address) else {
+            return []
+        }
+        let prefix = family == AF_INET ? "pigui_block4" : "pigui_block6"
+        switch direction {
+        case "in":
+            return ["\(prefix)_in"]
+        case "out":
+            return ["\(prefix)_out"]
+        default:
+            return ["\(prefix)_in", "\(prefix)_out"]
+        }
+    }
+
+    private func firewallStatePath() -> URL {
+        URL(fileURLWithPath: stateRoot).appendingPathComponent("firewall.json")
+    }
+
+    private func persistFirewallState() {
+        var record: [String: Any] = [
+            "generation": firewallGeneration,
+            "pf_enabled_by_pigui": firewallPFEnabledByPigui,
+            "pflog_created": firewallPflogCreated,
+            "block_labels": firewallBlockLabels,
+            "allow_labels": firewallAllowLabels,
+        ]
+        if let firewallAppliedAt {
+            record["applied_at"] = firewallAppliedAt
+        }
+        if let firewallPFToken {
+            record["pf_token"] = firewallPFToken
+        }
+        if let firewallLastError {
+            record["last_error"] = firewallLastError
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: record) else {
+            return
+        }
+        do {
+            try fileManager.createDirectory(
+                atPath: stateRoot,
+                withIntermediateDirectories: true
+            )
+            try data.write(to: firewallStatePath())
+        } catch {
+            return
+        }
+        _ = chown(firewallStatePath().path, 0, 0)
+        _ = chmod(firewallStatePath().path, 0o600)
+    }
+
+    private func restoreFirewallState() {
+        let path = firewallStatePath()
+        guard let data = try? Data(contentsOf: path),
+              let raw = try? JSONSerialization.jsonObject(with: data),
+              let object = raw as? [String: Any]
+        else {
+            return
+        }
+        firewallGeneration = object["generation"] as? Int ?? 0
+        firewallPFEnabledByPigui = object["pf_enabled_by_pigui"] as? Bool ?? false
+        firewallPflogCreated = object["pflog_created"] as? Bool ?? false
+        firewallBlockLabels = object["block_labels"] as? [String] ?? []
+        firewallAllowLabels = object["allow_labels"] as? [String] ?? []
+        firewallAppliedAt = object["applied_at"] as? Int
+        firewallPFToken = object["pf_token"] as? String
+        firewallLastError = object["last_error"] as? String
     }
 
     private func stagePayload() throws -> URL {
@@ -609,13 +1510,23 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         )
         _ = chown(auditDir, 0, 0)
 
+        var auditResult = result
+        if method == "firewall_events",
+           let data = result["data"] as? [String: Any],
+           let events = data["events"] as? [Any] {
+            auditResult = [
+                "ok": result["ok"] ?? false,
+                "event_count": events.count,
+            ]
+        }
+
         let record: [String: Any] = [
             "ts": Int(Date().timeIntervalSince1970),
             "helper": helperVersion,
             "pid": getpid(),
             "method": method,
             "params": params,
-            "result": result,
+            "result": auditResult,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: record),
               var line = String(data: data, encoding: .utf8)
@@ -637,7 +1548,13 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func redact(params: [String: Any]) -> [String: Any] {
-        params.filter { $0.key != "password" && $0.key != "token" }
+        var redacted = params.filter { $0.key != "password" && $0.key != "token" }
+        for key in ["block_rules", "allow_rules"] {
+            if let value = redacted[key] as? String {
+                redacted[key] = "<\(value.utf8.count) bytes>"
+            }
+        }
+        return redacted
     }
 
     private func ok(data: [String: Any]) -> [String: Any] {
@@ -659,6 +1576,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
 
     func shutdown() {
         queue.sync {
+            self.stopPflogReader()
             _ = try? self.disableCapture()
         }
     }

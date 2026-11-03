@@ -10,18 +10,24 @@ use pigui_core::rpc::{
     ListQuery, METHOD_ALERTS_LIST, METHOD_CAPTURE_ENSURE, METHOD_CAPTURE_HELPER_STATUS,
     METHOD_CAPTURE_START, METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
-    METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST,
-    METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
-    METHOD_PROCESSES_LIST, METHOD_QUIC_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET,
-    METHOD_SETTINGS_UPDATE, METHOD_SHUTDOWN, METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST,
-    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, MaintenanceStats, ProcessList,
-    ProcessQuery, QuicList, Request, Response, SetTrustRequest, SnortStatusPayload, StatusPayload,
-    TlsList, WatchedList, WatchedRequest,
+    METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_APPLY, METHOD_FIREWALL_BLOCKS_ADD,
+    METHOD_FIREWALL_BLOCKS_LIST, METHOD_FIREWALL_BLOCKS_REMOVE, METHOD_FIREWALL_COUNTERS,
+    METHOD_FIREWALL_ENABLE, METHOD_FIREWALL_EVENTS_LIST, METHOD_FIREWALL_RESET,
+    METHOD_FIREWALL_RULES_CREATE, METHOD_FIREWALL_RULES_DELETE, METHOD_FIREWALL_RULES_LIST,
+    METHOD_FIREWALL_RULES_REORDER, METHOD_FIREWALL_RULES_UPDATE, METHOD_FIREWALL_STATUS,
+    METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST, METHOD_MAINTENANCE_PRUNE,
+    METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_QUIC_LIST,
+    METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE, METHOD_SHUTDOWN,
+    METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST,
+    METHOD_WATCHED_REMOVE, MaintenanceStats, ProcessList, ProcessQuery, QuicList, Request,
+    Response, SetTrustRequest, SnortStatusPayload, StatusPayload, TlsList, WatchedList,
+    WatchedRequest,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::firewall;
 use crate::state::AppState;
 use crate::store::Store;
 
@@ -122,6 +128,40 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
         METHOD_SETTINGS_RESET => settings_reset(state),
         METHOD_MAINTENANCE_STATS => maintenance_stats(state),
         METHOD_MAINTENANCE_PRUNE => maintenance_prune(state),
+        METHOD_FIREWALL_STATUS => firewall::status(state)
+            .await
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_RULES_LIST => {
+            firewall::list_rules(state).and_then(|payload| Ok(serde_json::to_value(payload)?))
+        }
+        METHOD_FIREWALL_RULES_CREATE => firewall::create_rule(state, request.params)
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_RULES_UPDATE => firewall::update_rule(state, request.params)
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_RULES_DELETE => {
+            firewall::delete_rule(state, request.params).map(Value::from)
+        }
+        METHOD_FIREWALL_RULES_REORDER => firewall::reorder_rules(state, request.params)
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_ENABLE => firewall::enable(state, request.params)
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_APPLY => firewall::apply(state)
+            .await
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_RESET => firewall::reset(state)
+            .await
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_BLOCKS_LIST => {
+            firewall::list_blocks(state).and_then(|payload| Ok(serde_json::to_value(payload)?))
+        }
+        METHOD_FIREWALL_BLOCKS_ADD => firewall::add_block(state, request.params)
+            .await
+            .and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_FIREWALL_BLOCKS_REMOVE => firewall::remove_block(state, request.params)
+            .await
+            .map(Value::from),
+        METHOD_FIREWALL_COUNTERS => firewall::counters().await,
+        METHOD_FIREWALL_EVENTS_LIST => firewall::events(request.params).await,
         METHOD_SHUTDOWN => {
             state.request_shutdown();
             Ok(Value::from(true))
@@ -147,6 +187,9 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         http_count,
         quic_count,
         domain_count,
+        firewall_state,
+        firewall_rule_count,
+        firewall_block_count,
     ) = query_store(state, |store| {
         Ok((
             store.count_alerts()?,
@@ -159,6 +202,9 @@ fn status(state: &AppState) -> Result<StatusPayload> {
             store.count_http()?,
             store.count_quic()?,
             store.count_domains()?,
+            store.get_firewall_state()?,
+            store.count_firewall_rules()?,
+            store.count_firewall_blocks(crate::store::unix_now())?,
         ))
     })?;
     let snort = pigui_snort::status::status(&state.config);
@@ -222,6 +268,11 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         http_count,
         quic_count,
         domain_count,
+        firewall_enabled: firewall_state.enabled,
+        firewall_mode: firewall_state.mode.as_str().to_string(),
+        firewall_rule_count,
+        firewall_block_count,
+        firewall_needs_apply: firewall_state.needs_apply(),
         collector_error: state.collector_error(),
     })
 }

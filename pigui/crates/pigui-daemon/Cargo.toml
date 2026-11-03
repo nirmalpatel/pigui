@@ -18,6 +18,7 @@ clap.workspace = true
 dns-lookup.workspace = true
 pigui-collector.workspace = true
 pigui-core.workspace = true
+pigui-firewall.workspace = true
 pigui-snort.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

@@ -105,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
     ingest::spawn_process_collector(state.clone());
     ingest::spawn_name_resolver(state.clone());
     ingest::spawn_maintenance(state.clone());
+    pigui_daemon::firewall::spawn_reconciler(state.clone());
 
     tracing::info!(
         environment = %config.environment,

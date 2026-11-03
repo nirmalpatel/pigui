@@ -13,7 +13,7 @@ what is planned.
 | M3 | Snort discovery, config generation, control adapter, log ingestion | Partial: discovery, config generation, alert/extractor ingestion complete; control adapter missing |
 | M4 | macOS process/socket collector and correlation | Partial: `nettop` collector and 5-tuple joins complete; Network Extension later |
 | M5 | Rule bundle manager and validation pipeline | Planned |
-| M6 | PF helper in dry-run mode | Partial: SMAppService/XPC helper and dry-run actions implemented; PF execution pending |
+| M6 | PF helper | Partial: SMAppService/XPC helper, PF anchor/table/pflog backend, firewall storage/compiler, daemon RPC, reconciliation, and TTL sweeping implemented; GUI wiring pending |
 | M7 | Daemon API and GUI MVP | Partial: live processes/connections/destinations/alerts/domains/DNS API and tabs complete |
 | M8 | launchd packaging and macOS system integration | Partial: signed/notarized/stapled app and DMG implemented; installed helper launch verification pending |
 | M9 | Hardening, retention, audit, tests, documentation | Partial: retention, tests, and docs exist; audit and hardening pending |
@@ -42,10 +42,12 @@ what is planned.
 - Snort control socket: Snort can be built with it, but PIGUI has no client and
   live scripts do not wire it.
 - Signal-based Snort management.
-- Firewall: types and a dry-run backend exist; PF execution is a placeholder.
-- Helper: XPC service, payload staging, Snort lifecycle, audit, dry-run
-  firewall actions, dev-mode launchd/XPC capture, and capture-state recovery
-  exist; PF execution and fuller GUI onboarding remain.
+- Firewall: rule model, validation, PF compiler, SQLite storage, helper-side PF
+  execution, daemon RPC, reconciliation, and TTL sweeping exist; GUI wiring and
+  event history storage are still pending.
+- Helper: XPC service, payload staging, Snort lifecycle, audit, PF
+  anchor/table/pflog actions, dev-mode launchd/XPC capture, and capture-state
+  recovery exist; fuller GUI onboarding remains.
 - Rule bundles and policy engine.
 - Log rotation (database retention is implemented).
 - Sensor stats and firewall action history; helper privileged-action audit exists.

@@ -78,3 +78,57 @@ pub fn apply_block(ip: &str, direction: &str, ttl_secs: u64, reason: &str) -> Re
         }),
     )
 }
+
+pub fn firewall_status() -> Result<Value> {
+    request("firewall_status", json!({}))
+}
+
+pub fn firewall_apply(
+    block_rules: &str,
+    allow_rules: &str,
+    generation: i64,
+    enable_pf: bool,
+) -> Result<Value> {
+    request(
+        "firewall_apply",
+        json!({
+            "block_rules": block_rules,
+            "allow_rules": allow_rules,
+            "generation": generation,
+            "enable_pf": enable_pf,
+        }),
+    )
+}
+
+pub fn firewall_flush(disable_pf: bool) -> Result<Value> {
+    request("firewall_flush", json!({ "disable_pf": disable_pf }))
+}
+
+pub fn firewall_block(address: &str, direction: &str, ttl_secs: u64) -> Result<Value> {
+    request(
+        "firewall_block",
+        json!({
+            "address": address,
+            "direction": direction,
+            "ttl_secs": ttl_secs,
+        }),
+    )
+}
+
+pub fn firewall_unblock(address: &str, direction: Option<&str>) -> Result<Value> {
+    request(
+        "firewall_unblock",
+        json!({
+            "address": address,
+            "direction": direction,
+        }),
+    )
+}
+
+pub fn firewall_counters() -> Result<Value> {
+    request("firewall_counters", json!({}))
+}
+
+pub fn firewall_events(limit: u32) -> Result<Value> {
+    request("firewall_events", json!({ "limit": limit }))
+}

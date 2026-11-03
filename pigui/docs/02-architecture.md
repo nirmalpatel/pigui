@@ -10,7 +10,7 @@ domains.
 |---|---|---|---|
 | `PIGUI.app` | User | Presentation, search, drill-down, confirmations | Implemented |
 | `pigui-daemon` | Unprivileged | Ingestion, storage, policy, local API | Implemented |
-| `pigui-helper` | Root | Capture lifecycle, staged Snort payload, audit, dry-run firewall actions | Partial: SMAppService/XPC helper implemented |
+| `pigui-helper` | Root | Capture lifecycle, staged Snort payload, audit, PF anchor/table/pflog actions | Partial: SMAppService/XPC helper, PF backend, and daemon RPC implemented |
 | Snort 3 | Root | Packet inspection, alerts, flow/domain telemetry | Implemented |
 | OS collectors | Daemon thread | Process/socket attribution | Partial: macOS collector implemented |
 
@@ -38,10 +38,10 @@ notarized LaunchDaemon. Neither path asks PIGUI for a password.
 ┌──────────▼──────────────┐   ┌───────────▼──────────────────┐
 │ pigui-helper            │   │ Snort 3                      │
 │ Root. Capture + audit.  │   │ Root. Passive IDS.           │
-│ Firewall actions dry-run│   │                              │
+│ PF anchor/table actions  │   │                              │
 └──────────┬──────────────┘   └───────────┬──────────────────┘
            │                              │ alert_json, extractor
-   PF anchor/table (planned)              │ perf/flow dumps (planned)
+   PF anchor/table (implemented)          │ perf/flow dumps (planned)
                                           │
 ┌─────────────────────────────────────────▼───────────────────┐
 │ OS collectors: nettop, ps (current); lsof/netstat/future    │
@@ -56,7 +56,7 @@ notarized LaunchDaemon. Neither path asks PIGUI for a password.
 | `pigui-core` | Shared models, configuration, bundle/release paths, RPC types, domain normalization, GUI settings types, Unix socket client, helper and service bridges |
 | `pigui-snort` | Snort discovery, capability probe, config generation, process status, file tailer |
 | `pigui-collector` | Collector trait, macOS `nettop` collector and parser, `ps` metadata enrichment |
-| `pigui-firewall` | Firewall traits and block request/outcome types; dry-run backend; PF placeholder |
+| `pigui-firewall` | Rule/block/state models, validation, PF compiler, dry-run backend; privileged execution placeholder |
 | `pigui-daemon` | Ingestion, correlation, SQLite store, RPC server, background tasks |
 | `pigui-helper` | Placeholder crate; the packaged helper is Swift under `packaging/macos/helper` |
 | `pigui-cli` | Headless management, diagnostics, test fixture ingestion |
@@ -179,9 +179,10 @@ Planned flow additions:
 3. Privileged helper calls to apply PF/ufw/nftables changes.
 4. Sensor statistics.
 
-The current code invokes the helper for capture lifecycle and dry-run firewall
-actions. It does not apply firewall rules, evaluate policy, or manage rule
-bundles.
+The current helper implements capture lifecycle and PIGUI-owned PF anchor,
+table, and pflog actions. The daemon exposes firewall CRUD, apply, block, and
+telemetry RPC, and reconciles pending applies and expired blocks. Policy
+evaluation, GUI wiring, and rule bundles are still planned.
 
 ## Boundaries to preserve
 

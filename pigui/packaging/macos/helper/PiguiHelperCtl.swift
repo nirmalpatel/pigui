@@ -65,6 +65,24 @@ private func callHelper(_ request: [String: Any]) -> String {
     return response
 }
 
+private func readFile(_ path: String) -> String {
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+        fail("could not read \(path)")
+    }
+    return text
+}
+
+private func parseBool(_ value: String) -> Bool? {
+    switch value.lowercased() {
+    case "1", "true", "yes", "on":
+        return true
+    case "0", "false", "no", "off":
+        return false
+    default:
+        return nil
+    }
+}
+
 @main
 struct PiguiHelperCtlMain {
     static func main() {
@@ -91,27 +109,62 @@ struct PiguiHelperCtlMain {
 
         var params: [String: Any] = [:]
         switch command {
-        case "status", "version", "disable-capture", "flush-firewall":
+        case "status", "version", "disable-capture", "flush-firewall",
+             "firewall-status", "firewall-counters":
             break
         case "enable-capture":
             guard let interface = arguments.first else {
                 fail("usage: pigui-helperctl enable-capture <interface>", code: 2)
             }
             params["interface"] = interface
-        case "apply-block":
+        case "apply-block", "firewall-block":
             guard let ip = arguments.first else {
-                fail("usage: pigui-helperctl apply-block <ip-or-cidr> [direction] [ttl]", code: 2)
+                fail(
+                    "usage: pigui-helperctl firewall-block <ip-or-cidr> [in|out|both] [ttl]",
+                    code: 2
+                )
             }
-            params["ip"] = ip
+            params["address"] = ip
             if arguments.count > 1 {
                 params["direction"] = arguments[1]
             }
             if arguments.count > 2, let ttl = Int(arguments[2]) {
                 params["ttl_secs"] = ttl
             }
+        case "firewall-unblock":
+            guard let ip = arguments.first else {
+                fail("usage: pigui-helperctl firewall-unblock <ip-or-cidr> [in|out|both]", code: 2)
+            }
+            params["address"] = ip
+            if arguments.count > 1 {
+                params["direction"] = arguments[1]
+            }
+        case "firewall-flush":
+            if let value = arguments.first, let disable = parseBool(value) {
+                params["disable_pf"] = disable
+            }
+        case "firewall-events":
+            if let value = arguments.first, let limit = Int(value) {
+                params["limit"] = limit
+            }
+        case "firewall-apply":
+            guard arguments.count >= 2 else {
+                fail(
+                    "usage: pigui-helperctl firewall-apply <block-rules-file> <allow-rules-file> [generation] [enable-pf]",
+                    code: 2
+                )
+            }
+            params["block_rules"] = readFile(arguments[0])
+            params["allow_rules"] = readFile(arguments[1])
+            if arguments.count > 2, let generation = Int(arguments[2]) {
+                params["generation"] = generation
+            }
+            if arguments.count > 3, let enable = parseBool(arguments[3]) {
+                params["enable_pf"] = enable
+            }
         default:
             fail(
-                "usage: pigui-helperctl status|version|enable-capture <iface>|disable-capture|flush-firewall|apply-block <ip> [direction] [ttl]",
+                "usage: pigui-helperctl status|version|enable-capture <iface>|disable-capture|flush-firewall|apply-block <ip> [direction] [ttl]|firewall-status|firewall-counters|firewall-events [limit]|firewall-apply <block-file> <allow-file> [generation] [enable-pf]|firewall-block <ip> [direction] [ttl]|firewall-unblock <ip> [direction]|firewall-flush [disable-pf]",
                 code: 2
             )
         }

@@ -36,6 +36,20 @@ pub const METHOD_SETTINGS_UPDATE: &str = "settings.update";
 pub const METHOD_SETTINGS_RESET: &str = "settings.reset";
 pub const METHOD_MAINTENANCE_STATS: &str = "maintenance.stats";
 pub const METHOD_MAINTENANCE_PRUNE: &str = "maintenance.prune_now";
+pub const METHOD_FIREWALL_STATUS: &str = "firewall.status";
+pub const METHOD_FIREWALL_RULES_LIST: &str = "firewall.rules.list";
+pub const METHOD_FIREWALL_RULES_CREATE: &str = "firewall.rules.create";
+pub const METHOD_FIREWALL_RULES_UPDATE: &str = "firewall.rules.update";
+pub const METHOD_FIREWALL_RULES_DELETE: &str = "firewall.rules.delete";
+pub const METHOD_FIREWALL_RULES_REORDER: &str = "firewall.rules.reorder";
+pub const METHOD_FIREWALL_ENABLE: &str = "firewall.enable";
+pub const METHOD_FIREWALL_APPLY: &str = "firewall.apply";
+pub const METHOD_FIREWALL_RESET: &str = "firewall.reset";
+pub const METHOD_FIREWALL_BLOCKS_LIST: &str = "firewall.blocks.list";
+pub const METHOD_FIREWALL_BLOCKS_ADD: &str = "firewall.blocks.add";
+pub const METHOD_FIREWALL_BLOCKS_REMOVE: &str = "firewall.blocks.remove";
+pub const METHOD_FIREWALL_COUNTERS: &str = "firewall.counters";
+pub const METHOD_FIREWALL_EVENTS_LIST: &str = "firewall.events.list";
 pub const METHOD_SHUTDOWN: &str = "shutdown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,6 +389,16 @@ pub struct StatusPayload {
     pub quic_count: u64,
     #[serde(default)]
     pub domain_count: u64,
+    #[serde(default)]
+    pub firewall_enabled: bool,
+    #[serde(default)]
+    pub firewall_mode: String,
+    #[serde(default)]
+    pub firewall_rule_count: u64,
+    #[serde(default)]
+    pub firewall_block_count: u64,
+    #[serde(default)]
+    pub firewall_needs_apply: bool,
     #[serde(default)]
     pub collector_error: Option<String>,
 }

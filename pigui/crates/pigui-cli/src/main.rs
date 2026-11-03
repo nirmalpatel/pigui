@@ -8,9 +8,14 @@ use pigui_core::paths::resolve_snort;
 use pigui_core::rpc::{
     AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, DomainList, FlowList,
     HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST,
-    METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST,
-    METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD,
-    METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, ProcessList, StatusPayload, TlsList, WatchedList,
+    METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_APPLY,
+    METHOD_FIREWALL_BLOCKS_ADD, METHOD_FIREWALL_BLOCKS_LIST, METHOD_FIREWALL_BLOCKS_REMOVE,
+    METHOD_FIREWALL_COUNTERS, METHOD_FIREWALL_ENABLE, METHOD_FIREWALL_EVENTS_LIST,
+    METHOD_FIREWALL_RESET, METHOD_FIREWALL_RULES_CREATE, METHOD_FIREWALL_RULES_DELETE,
+    METHOD_FIREWALL_RULES_LIST, METHOD_FIREWALL_RULES_REORDER, METHOD_FIREWALL_RULES_UPDATE,
+    METHOD_FIREWALL_STATUS, METHOD_FLOWS_LIST, METHOD_HTTP_LIST, METHOD_PROCESSES_LIST,
+    METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
+    ProcessList, StatusPayload, TlsList, WatchedList,
 };
 use pigui_core::service::{self, ServiceAction};
 use pigui_daemon::ingest;
@@ -106,6 +111,11 @@ enum Command {
         #[arg(long)]
         remove: bool,
     },
+    /// Manage PIGUI firewall rules and dynamic blocks.
+    Firewall {
+        #[command(subcommand)]
+        command: FirewallCommand,
+    },
     /// List HTTP observations.
     Http {
         #[arg(long, default_value_t = 20)]
@@ -177,6 +187,62 @@ impl ServiceCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum FirewallCommand {
+    /// Show PIGUI firewall state and helper status.
+    Status,
+    /// List PIGUI firewall rules.
+    Rules,
+    /// Compile and apply the current rules to PF.
+    Apply,
+    /// Enable or disable PIGUI firewall enforcement.
+    Enable {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// Remove all PIGUI rules, blocks, and helper PF state.
+    Reset,
+    /// List active dynamic blocks.
+    Blocks,
+    /// Add a dynamic block.
+    Block {
+        ip: String,
+        #[arg(long, default_value = "both")]
+        direction: String,
+        #[arg(long, default_value_t = 60)]
+        ttl: i64,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Remove a dynamic block.
+    Unblock {
+        ip: String,
+        #[arg(long, default_value = "both")]
+        direction: String,
+    },
+    /// Show per-rule PF label counters.
+    Counters,
+    /// Show recent pflog events buffered by the helper.
+    Events {
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    /// Create a rule from a JSON file containing a FirewallRule object.
+    RuleAdd {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Update a rule from a JSON file containing a FirewallRule object.
+    RuleUpdate {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Delete a rule by id.
+    RuleDelete { id: i64 },
+    /// Reorder all rules by id.
+    RuleReorder { ids: Vec<i64> },
+}
+
+#[derive(Debug, Subcommand)]
 enum HelperCommand {
     /// Show helper version, root state, and capture status.
     Status,
@@ -186,9 +252,9 @@ enum HelperCommand {
     EnableCapture { interface: String },
     /// Stop Snort capture.
     DisableCapture,
-    /// Flush dry-run firewall state.
+    /// Flush PIGUI PF anchors and dynamic block tables.
     FlushFirewall,
-    /// Request a dry-run firewall block.
+    /// Add a PF dynamic block.
     ApplyBlock {
         ip: String,
         #[arg(long, default_value = "both")]
@@ -197,6 +263,43 @@ enum HelperCommand {
         ttl: u64,
         #[arg(long, default_value = "operator request")]
         reason: String,
+    },
+    /// Show PF state, PIGUI anchors, and the applied generation.
+    FirewallStatus,
+    /// Show per-rule PF label counters.
+    FirewallCounters,
+    /// Show recent blocked events from the PIGUI pflog interface.
+    FirewallEvents {
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    /// Apply compiled block and allow rule files to PF.
+    FirewallApply {
+        block_rules: PathBuf,
+        allow_rules: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        generation: i64,
+        #[arg(long)]
+        enable_pf: bool,
+    },
+    /// Flush PIGUI PF state, optionally disabling PF if PIGUI enabled it.
+    FirewallFlush {
+        #[arg(long)]
+        disable_pf: bool,
+    },
+    /// Add a PF dynamic block.
+    FirewallBlock {
+        ip: String,
+        #[arg(long, default_value = "both")]
+        direction: String,
+        #[arg(long, default_value_t = 0)]
+        ttl: u64,
+    },
+    /// Remove a PF dynamic block.
+    FirewallUnblock {
+        ip: String,
+        #[arg(long, default_value = "both")]
+        direction: String,
     },
 }
 
@@ -430,6 +533,59 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Command::Firewall { command } => {
+            let client = client(&config);
+            let result = match command {
+                FirewallCommand::Status => client.call(METHOD_FIREWALL_STATUS, json!({}))?,
+                FirewallCommand::Rules => client.call(METHOD_FIREWALL_RULES_LIST, json!({}))?,
+                FirewallCommand::Apply => client.call(METHOD_FIREWALL_APPLY, json!({}))?,
+                FirewallCommand::Enable { enabled } => {
+                    client.call(METHOD_FIREWALL_ENABLE, json!({ "enabled": enabled }))?
+                }
+                FirewallCommand::Reset => client.call(METHOD_FIREWALL_RESET, json!({}))?,
+                FirewallCommand::Blocks => client.call(METHOD_FIREWALL_BLOCKS_LIST, json!({}))?,
+                FirewallCommand::Block {
+                    ip,
+                    direction,
+                    ttl,
+                    reason,
+                } => client.call(
+                    METHOD_FIREWALL_BLOCKS_ADD,
+                    json!({
+                        "address": ip,
+                        "direction": direction,
+                        "ttl_secs": ttl,
+                        "reason": reason,
+                        "source": "manual",
+                    }),
+                )?,
+                FirewallCommand::Unblock { ip, direction } => client.call(
+                    METHOD_FIREWALL_BLOCKS_REMOVE,
+                    json!({ "address": ip, "direction": direction }),
+                )?,
+                FirewallCommand::Counters => client.call(METHOD_FIREWALL_COUNTERS, json!({}))?,
+                FirewallCommand::Events { limit } => {
+                    client.call(METHOD_FIREWALL_EVENTS_LIST, json!({ "limit": limit }))?
+                }
+                FirewallCommand::RuleAdd { file } => {
+                    let rule: serde_json::Value =
+                        serde_json::from_str(&std::fs::read_to_string(file)?)?;
+                    client.call(METHOD_FIREWALL_RULES_CREATE, json!({ "rule": rule }))?
+                }
+                FirewallCommand::RuleUpdate { file } => {
+                    let rule: serde_json::Value =
+                        serde_json::from_str(&std::fs::read_to_string(file)?)?;
+                    client.call(METHOD_FIREWALL_RULES_UPDATE, json!({ "rule": rule }))?
+                }
+                FirewallCommand::RuleDelete { id } => {
+                    client.call(METHOD_FIREWALL_RULES_DELETE, json!({ "id": id }))?
+                }
+                FirewallCommand::RuleReorder { ids } => {
+                    client.call(METHOD_FIREWALL_RULES_REORDER, json!({ "ids": ids }))?
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         Command::Service { command } => {
             print!("{}", service::run(command.action())?);
         }
@@ -446,6 +602,26 @@ fn main() -> anyhow::Result<()> {
                     ttl,
                     reason,
                 } => helper::apply_block(&ip, &direction, ttl, &reason)?,
+                HelperCommand::FirewallStatus => helper::firewall_status()?,
+                HelperCommand::FirewallCounters => helper::firewall_counters()?,
+                HelperCommand::FirewallEvents { limit } => helper::firewall_events(limit)?,
+                HelperCommand::FirewallApply {
+                    block_rules,
+                    allow_rules,
+                    generation,
+                    enable_pf,
+                } => {
+                    let block_rules = std::fs::read_to_string(&block_rules)?;
+                    let allow_rules = std::fs::read_to_string(&allow_rules)?;
+                    helper::firewall_apply(&block_rules, &allow_rules, generation, enable_pf)?
+                }
+                HelperCommand::FirewallFlush { disable_pf } => helper::firewall_flush(disable_pf)?,
+                HelperCommand::FirewallBlock { ip, direction, ttl } => {
+                    helper::firewall_block(&ip, &direction, ttl)?
+                }
+                HelperCommand::FirewallUnblock { ip, direction } => {
+                    helper::firewall_unblock(&ip, Some(&direction))?
+                }
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }

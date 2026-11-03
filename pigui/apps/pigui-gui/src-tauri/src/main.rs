@@ -3,7 +3,7 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
@@ -100,16 +100,40 @@ fn agent_service_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn daemon_version(config: &Config) -> Result<String, String> {
+fn daemon_status(config: &Config) -> Result<Value, String> {
     let client = DaemonClient::new(&config.socket_path);
-    let value = client
+    client
         .call(METHOD_STATUS, json!({}))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+fn daemon_version(config: &Config) -> Result<String, String> {
+    let value = daemon_status(config)?;
     Ok(value
         .get("version")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string())
+}
+
+fn daemon_binary_changed(status: &Value) -> bool {
+    let Some(uptime) = status.get("uptime_secs").and_then(Value::as_u64) else {
+        return false;
+    };
+    let Ok(daemon) = daemon_binary() else {
+        return false;
+    };
+    let Ok(modified) = std::fs::metadata(&daemon).and_then(|metadata| metadata.modified()) else {
+        return false;
+    };
+    let Ok(modified) = modified.duration_since(UNIX_EPOCH) else {
+        return false;
+    };
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return false;
+    };
+    let started_at = now.as_secs().saturating_sub(uptime);
+    started_at.saturating_add(2) < modified.as_secs()
 }
 
 fn helper_version() -> Result<String, String> {
@@ -213,11 +237,22 @@ fn start_direct_daemon_if_needed(config: &Config) -> Result<String, String> {
 fn ensure_daemon(config: &Config, expected: &str) -> Result<String, String> {
     let mut stale = false;
     if config.socket_path.exists() {
-        match daemon_version(config) {
-            Ok(version) if version == expected => return Ok(format!("running {version}")),
-            Ok(version) => {
+        match daemon_status(config) {
+            Ok(status) => {
+                let version = status
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if version == expected && !daemon_binary_changed(&status) {
+                    return Ok(format!("running {version}"));
+                }
                 stale = true;
-                eprintln!("PIGUI daemon is version {version}; expected {expected}");
+                if version == expected {
+                    eprintln!("PIGUI daemon binary changed since it started; restarting");
+                } else {
+                    eprintln!("PIGUI daemon is version {version}; expected {expected}");
+                }
             }
             Err(error) => {
                 stale = true;

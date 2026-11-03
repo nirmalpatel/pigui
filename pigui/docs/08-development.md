@@ -62,10 +62,42 @@ The helper XPC bridge is available for diagnostics once the helper is running:
 ```bash
 target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper status
 target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper apply-block 198.51.100.10 --ttl 60
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper firewall-status
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper firewall-counters
+target/macos/PIGUI.app/Contents/MacOS/pigui-cli helper firewall-events --limit 50
 ```
 
-The helper accepts only fixed methods. `apply_block` and `flush_firewall` are
-dry-run until PF execution is implemented.
+The helper accepts only fixed methods. `apply_block` and `flush_firewall` now
+use the PIGUI PF anchor; `firewall-apply` loads compiled block/allow rule files,
+and `firewall-flush --disable-pf` releases PIGUI's PF enable reference. Use
+these diagnostic commands only while testing enforcement.
+
+After `scripts/run-dev.sh` is running, the end-to-end helper smoke test is:
+
+```bash
+./scripts/firewall-p2-smoke.sh
+```
+
+It applies temporary rules, adds a dynamic block, sends one loopback packet,
+prints counters and pflog events, then restores the previous PF state.
+
+The daemon RPC smoke test uses the same running dev environment:
+
+```bash
+./scripts/firewall-p3-smoke.sh
+```
+
+It creates a rule through `pigui-cli firewall`, applies it through the daemon,
+exercises dynamic blocks, counters, and events, then removes its rule and
+restores the previous enabled state. Useful diagnostics:
+
+```bash
+target/debug/pigui-cli firewall status
+target/debug/pigui-cli firewall rules
+target/debug/pigui-cli firewall blocks
+target/debug/pigui-cli firewall counters
+target/debug/pigui-cli firewall events --limit 20
+```
 
 ## Signed macOS release
 
@@ -185,8 +217,8 @@ Collectors:
 
 Firewall:
 
-1. Implement `pigui_firewall::FirewallBackend`.
-2. Add the backend name, `apply_block`, and `flush`.
+1. Keep platform execution in the privileged helper.
+2. Extend `pigui-firewall` models and compiler for the platform.
 3. Do not call platform firewalls from the GUI or the unprivileged daemon.
 4. Add an allowlist, TTL handling, rate limits, and audit before enabling.
 

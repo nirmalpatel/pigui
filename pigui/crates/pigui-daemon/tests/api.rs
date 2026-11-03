@@ -9,15 +9,18 @@ use pigui_core::models::{Alert, ExtractorRecord, SnortCapabilities};
 use pigui_core::rpc::{
     AlertList, ConnectionList, DestinationDetail, DestinationList, DomainList, METHOD_ALERTS_LIST,
     METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST,
-    METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL,
-    METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
-    METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
-    ProcessDetail, ProcessList, StatusPayload, WatchedList,
+    METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_ENABLE,
+    METHOD_FIREWALL_RULES_CREATE, METHOD_FIREWALL_RULES_DELETE, METHOD_FIREWALL_RULES_LIST,
+    METHOD_FIREWALL_RULES_UPDATE, METHOD_FIREWALL_STATUS, METHOD_FLOWS_LIST,
+    METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET,
+    METHOD_SETTINGS_UPDATE, METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD,
+    METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, ProcessDetail, ProcessList, StatusPayload,
+    WatchedList,
 };
 use pigui_daemon::api;
 use pigui_daemon::state::AppState;
 use pigui_daemon::store::Store;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn test_config(root: &Path) -> Config {
     let home = root.to_path_buf();
@@ -131,6 +134,77 @@ async fn serves_status_alerts_and_destinations() {
     assert_eq!(status.tls_count, 1);
     assert_eq!(status.domain_count, 1);
     assert!(!status.extractor_file.is_empty());
+    assert!(!status.firewall_enabled);
+    assert_eq!(status.firewall_mode, "blocklist");
+    assert_eq!(status.firewall_rule_count, 0);
+
+    let created: Value = client
+        .call_typed(
+            METHOD_FIREWALL_RULES_CREATE,
+            json!({
+                "rule": {
+                    "name": "block ssh",
+                    "enabled": true,
+                    "action": "block",
+                    "direction": "in",
+                    "protocol": "tcp",
+                    "remote_address": "192.0.2.10",
+                    "remote_port": "22",
+                    "log": true
+                }
+            }),
+        )
+        .unwrap();
+    let rule_id = created["id"].as_i64().unwrap();
+    assert_eq!(created["name"].as_str(), Some("block ssh"));
+
+    let rules: Value = client
+        .call_typed(METHOD_FIREWALL_RULES_LIST, json!({}))
+        .unwrap();
+    assert_eq!(rules["rules"].as_array().unwrap().len(), 1);
+    assert_eq!(rules["state"]["enabled"].as_bool(), Some(false));
+
+    let updated: Value = client
+        .call_typed(
+            METHOD_FIREWALL_RULES_UPDATE,
+            json!({
+                "rule": {
+                    "id": rule_id,
+                    "name": "block ssh harder",
+                    "enabled": false,
+                    "action": "block",
+                    "direction": "in",
+                    "protocol": "tcp",
+                    "remote_address": "192.0.2.10",
+                    "remote_port": "22",
+                    "log": true
+                }
+            }),
+        )
+        .unwrap();
+    assert_eq!(updated["name"].as_str(), Some("block ssh harder"));
+    assert_eq!(updated["enabled"].as_bool(), Some(false));
+
+    let enabled_state: Value = client
+        .call_typed(METHOD_FIREWALL_ENABLE, json!({ "enabled": true }))
+        .unwrap();
+    assert_eq!(enabled_state["enabled"].as_bool(), Some(true));
+
+    let firewall_status: Value = client
+        .call_typed(METHOD_FIREWALL_STATUS, json!({}))
+        .unwrap();
+    assert_eq!(firewall_status["state"]["enabled"].as_bool(), Some(true));
+    assert_eq!(firewall_status["rule_count"].as_u64(), Some(1));
+    assert!(firewall_status["helper_error"].is_string());
+
+    let deleted: bool = client
+        .call_typed(METHOD_FIREWALL_RULES_DELETE, json!({ "id": rule_id }))
+        .unwrap();
+    assert!(deleted);
+    let rules: Value = client
+        .call_typed(METHOD_FIREWALL_RULES_LIST, json!({}))
+        .unwrap();
+    assert_eq!(rules["rules"].as_array().unwrap().len(), 0);
 
     let alerts: AlertList = client
         .call_typed(METHOD_ALERTS_LIST, json!({ "limit": 10 }))

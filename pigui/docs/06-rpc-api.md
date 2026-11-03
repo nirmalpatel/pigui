@@ -65,6 +65,20 @@ Failure:
 | `settings.reset` | `{}` | `AppSettings` |
 | `maintenance.stats` | `{}` | `MaintenanceStats` |
 | `maintenance.prune_now` | `{}` | `PruneResult` |
+| `firewall.status` | `{}` | `FirewallStatusPayload` |
+| `firewall.rules.list` | `{}` | `FirewallRuleList` |
+| `firewall.rules.create` | `{rule}` | `FirewallRule` |
+| `firewall.rules.update` | `{rule}` | `FirewallRule` |
+| `firewall.rules.delete` | `{id}` | `true` |
+| `firewall.rules.reorder` | `{ids}` | `[FirewallRule]` |
+| `firewall.enable` | `{enabled}` | `FirewallState` |
+| `firewall.apply` | `{}` | `FirewallStatusPayload` |
+| `firewall.reset` | `{}` | `FirewallStatusPayload` |
+| `firewall.blocks.list` | `{}` | `FirewallBlockList` |
+| `firewall.blocks.add` | `{address, direction, ttl_secs, reason?, source?}` | `FirewallBlock` |
+| `firewall.blocks.remove` | `{id?, address?, direction?}` | `true` |
+| `firewall.counters` | `{}` | helper counter JSON |
+| `firewall.events.list` | `{limit?}` | helper event JSON |
 | `shutdown` | `{}` | `true` |
 
 List methods accept `{limit, offset, q, sort, dir}`. `limit` defaults to the
@@ -453,6 +467,50 @@ host, uri, user_agent, status_code`.
 `QuicList` observations: `id, ts, client_ip, server_ip, server_port,
 server_name, client_protocol`.
 
+## Firewall
+
+`FirewallStatusPayload` combines daemon state, database counts, and the helper's
+raw PF status:
+
+```json
+{
+  "state": {
+    "enabled": true,
+    "mode": "blocklist",
+    "generation": 2,
+    "applied_generation": 2,
+    "applied_at": 1750000000,
+    "last_error": null,
+    "pf_enabled_by_pigui": true
+  },
+  "rule_count": 1,
+  "block_count": 0,
+  "helper": {"ok": true, "data": {"pf_enabled": true, "...": "..."}},
+  "helper_error": null
+}
+```
+
+`FirewallRule` fields: `id, name, enabled, action, direction, protocol,
+local_address, local_port, remote_address, remote_port, interface, log,
+priority, created_at, updated_at`. `action` is `allow`, `block`, or `reject`;
+`direction` is `in`, `out`, or `both`; `protocol` is `any`, `tcp`, `udp`,
+`icmp`, or `icmp6`.
+
+`FirewallRuleList` contains `rules` and `state`.
+
+`FirewallBlock` fields: `id, address, direction, ttl_secs, reason, source,
+created_at, expires_at`. `FirewallBlockList` contains `blocks`.
+
+`firewall.apply` compiles enabled rules and calls the root helper. When
+`state.enabled` is false, it flushes the PIGUI anchors, clears dynamic tables,
+and releases PIGUI's PF enable token. CRUD and enable calls update desired state
+but do not apply; the GUI calls `firewall.apply`, and a 15-second daemon
+reconciler retries pending applies and removes expired blocks.
+
+`firewall.counters` and `firewall.events.list` return the helper's raw response.
+The helper keeps up to 1000 recent pflog events in memory and drains them when
+`firewall.events.list` is called. The daemon does not yet persist event history.
+
 ## Errors
 
 Errors are plain strings. Common cases:
@@ -480,6 +538,16 @@ Errors are plain strings. Common cases:
 | `pigui-cli watched` | `watched.list` |
 | `pigui-cli watch <domain>` / `--remove` | `watched.add` / `watched.remove` |
 | `pigui-cli dns` / `tls` / `http` | `dns.list` / `tls.list` / `http.list` |
+| `pigui-cli firewall status` | `firewall.status` |
+| `pigui-cli firewall rules` | `firewall.rules.list` |
+| `pigui-cli firewall apply` | `firewall.apply` |
+| `pigui-cli firewall enable <bool>` | `firewall.enable` |
+| `pigui-cli firewall reset` | `firewall.reset` |
+| `pigui-cli firewall blocks` | `firewall.blocks.list` |
+| `pigui-cli firewall block <ip>` | `firewall.blocks.add` |
+| `pigui-cli firewall unblock <ip>` | `firewall.blocks.remove` |
+| `pigui-cli firewall counters` | `firewall.counters` |
+| `pigui-cli firewall events` | `firewall.events.list` |
 | `pigui-cli snort status` | local PID-file status, not RPC |
 
 The GUI uses `status`, capture, list, detail, trust, watched-domain, and

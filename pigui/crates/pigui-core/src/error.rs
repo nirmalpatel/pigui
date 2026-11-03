@@ -22,6 +22,8 @@ pub enum Error {
     Rpc(String),
     #[error("helper not implemented: {0}")]
     NotImplemented(String),
+    #[error("firewall error: {0}")]
+    Firewall(String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }

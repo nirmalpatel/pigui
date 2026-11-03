@@ -6,7 +6,7 @@ use pigui_core::Config;
 use pigui_core::models::SnortCapabilities;
 use pigui_core::rpc::{CaptureState, PruneResult};
 use pigui_core::settings::AppSettings;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use crate::store::{IngestStats, Store};
 
@@ -14,6 +14,7 @@ use crate::store::{IngestStats, Store};
 pub struct AppState {
     pub config: Config,
     pub store: Mutex<Store>,
+    pub firewall_lock: AsyncMutex<()>,
     pub capabilities: SnortCapabilities,
     pub started_at: Instant,
     pub alerts_ingested: AtomicU64,
@@ -37,6 +38,7 @@ impl AppState {
         Self {
             config,
             store: Mutex::new(store),
+            firewall_lock: AsyncMutex::new(()),
             capabilities,
             started_at: Instant::now(),
             alerts_ingested: AtomicU64::new(0),

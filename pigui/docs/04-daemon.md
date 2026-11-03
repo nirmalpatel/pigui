@@ -17,7 +17,7 @@ duties:
   console user; the app never invokes `sudo`.
 - The daemon reads Snort output files and polls `nettop` as the current user.
 - The packaged `pigui-helper` is the root-owned component for capture lifecycle
-  and dry-run firewall actions.
+  and PIGUI-owned PF anchor, table, and pflog actions.
 
 Do not install or launch the daemon as a root LaunchDaemon without revisiting
 this model. Running the daemon unprivileged keeps the highest-risk ingestion and
@@ -150,5 +150,7 @@ Tracing output goes to stdout with ANSI disabled when not a terminal. Set
 - No control-socket client; Snort is managed by process/PID file.
 - No signal-based reload or stats dump.
 - No policy engine or rule bundle manager.
-- PF execution is pending; capture state is persisted and recovered across daemon/helper restarts.
+- PF helper execution, daemon firewall RPC, reconciliation, and TTL sweeping
+  exist; GUI wiring is still pending. Capture state is persisted and recovered
+  across daemon/helper restarts.
 - No log rotation job yet; database retention is implemented.

@@ -15,6 +15,10 @@ use pigui_core::rpc::{
     ProcessDestination, ProcessDetail, PruneResult, SortDirection, TableCount,
 };
 use pigui_core::settings::{AppSettings, ThemeMode};
+use pigui_firewall::{
+    Direction, FirewallAuditEntry, FirewallBlock, FirewallMode, FirewallRule, FirewallState,
+    Protocol, RuleAction, normalize_address,
+};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{
     Connection as SqlConnection, OpenFlags, OptionalExtension, params, params_from_iter,
@@ -278,6 +282,86 @@ CREATE TABLE IF NOT EXISTS watched_domains (
     last_resolved_at INTEGER,
     last_error TEXT
 );
+
+CREATE TABLE IF NOT EXISTS firewall_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    action TEXT NOT NULL CHECK (action IN ('allow', 'block', 'reject')),
+    direction TEXT NOT NULL CHECK (direction IN ('in', 'out', 'both')),
+    protocol TEXT NOT NULL CHECK (protocol IN ('any', 'tcp', 'udp', 'icmp', 'icmp6')),
+    local_address TEXT,
+    local_port TEXT,
+    remote_address TEXT,
+    remote_port TEXT,
+    interface TEXT,
+    log INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_firewall_rules_priority ON firewall_rules (priority, id);
+
+CREATE TABLE IF NOT EXISTS firewall_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'blocklist' CHECK (mode IN ('blocklist', 'policy')),
+    generation INTEGER NOT NULL DEFAULT 0,
+    applied_generation INTEGER NOT NULL DEFAULT 0,
+    applied_at INTEGER,
+    last_error TEXT,
+    pf_enabled_by_pigui INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS firewall_blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    address TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('in', 'out', 'both')),
+    ttl_secs INTEGER NOT NULL,
+    reason TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_blocks_unique
+    ON firewall_blocks (address, direction);
+CREATE INDEX IF NOT EXISTS idx_firewall_blocks_expires_at
+    ON firewall_blocks (expires_at);
+
+CREATE TABLE IF NOT EXISTS firewall_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    rule_id INTEGER,
+    rule_label TEXT,
+    action TEXT,
+    direction TEXT,
+    interface TEXT,
+    proto TEXT,
+    src TEXT,
+    dst TEXT,
+    src_port INTEGER,
+    dst_port INTEGER,
+    raw TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_firewall_events_ts ON firewall_events (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_firewall_events_rule_id ON firewall_events (rule_id);
+
+CREATE TABLE IF NOT EXISTS firewall_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    rule_id INTEGER,
+    detail TEXT,
+    result TEXT NOT NULL,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_firewall_audit_ts ON firewall_audit (ts DESC);
 
 "#;
 
@@ -650,13 +734,17 @@ impl Store {
         let previous_version = read_schema_version(&conn)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         ensure_endpoints_hostname(&conn)?;
-        if !matches!(previous_version.as_deref(), Some("5" | "6")) {
+        ensure_firewall_state(&conn)?;
+        if !matches!(previous_version.as_deref(), Some("5" | "6" | "7")) {
             migrate_v5(&conn)?;
         }
-        if !matches!(previous_version.as_deref(), Some("3" | "4" | "5" | "6")) {
+        if !matches!(
+            previous_version.as_deref(),
+            Some("3" | "4" | "5" | "6" | "7")
+        ) {
             backfill_domains(&conn)?;
         }
-        set_schema_version(&conn, "6")?;
+        set_schema_version(&conn, "7")?;
         Ok(Self { conn })
     }
 
@@ -2467,6 +2555,530 @@ impl Store {
     }
 }
 
+impl Store {
+    pub fn list_firewall_rules(&self) -> Result<Vec<FirewallRule>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, name, enabled, action, direction, protocol,
+                        local_address, local_port, remote_address, remote_port,
+                        interface, log, priority, created_at, updated_at
+                 FROM firewall_rules
+                 ORDER BY priority ASC, id ASC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map([], firewall_rule_from_row)
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn get_firewall_rule(&self, id: i64) -> Result<Option<FirewallRule>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, enabled, action, direction, protocol,
+                        local_address, local_port, remote_address, remote_port,
+                        interface, log, priority, created_at, updated_at
+                 FROM firewall_rules WHERE id = ?1",
+                params![id],
+                firewall_rule_from_row,
+            )
+            .optional()
+            .map_err(db)
+    }
+
+    pub fn count_firewall_rules(&self) -> Result<u64> {
+        self.count("SELECT COUNT(*) FROM firewall_rules")
+    }
+
+    pub fn create_firewall_rule(&self, rule: &FirewallRule) -> Result<FirewallRule> {
+        let rule = rule.normalized()?;
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let priority: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(priority), -1) + 1 FROM firewall_rules",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db)?;
+        let now = unix_now();
+        tx.execute(
+            "INSERT INTO firewall_rules (
+                 name, enabled, action, direction, protocol, local_address,
+                 local_port, remote_address, remote_port, interface, log,
+                 priority, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+            params![
+                rule.name,
+                bool_value(rule.enabled),
+                rule.action.as_str(),
+                rule.direction.as_str(),
+                rule.protocol.as_str(),
+                rule.local_address,
+                rule.local_port,
+                rule.remote_address,
+                rule.remote_port,
+                rule.interface,
+                bool_value(rule.log),
+                priority,
+                now,
+            ],
+        )
+        .map_err(db)?;
+        let id = tx.last_insert_rowid();
+        bump_firewall_generation(&tx)?;
+        tx.commit().map_err(db)?;
+        self.get_firewall_rule(id)?
+            .ok_or_else(|| Error::Database("firewall rule insert failed".into()))
+    }
+
+    pub fn update_firewall_rule(&self, rule: &FirewallRule) -> Result<FirewallRule> {
+        if rule.id <= 0 {
+            return Err(Error::Firewall("firewall rule id is required".into()));
+        }
+        let rule = rule.normalized()?;
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let now = unix_now();
+        let changed = tx
+            .execute(
+                "UPDATE firewall_rules SET
+                     name = ?1, enabled = ?2, action = ?3, direction = ?4,
+                     protocol = ?5, local_address = ?6, local_port = ?7,
+                     remote_address = ?8, remote_port = ?9, interface = ?10,
+                     log = ?11, updated_at = ?12
+                 WHERE id = ?13",
+                params![
+                    rule.name,
+                    bool_value(rule.enabled),
+                    rule.action.as_str(),
+                    rule.direction.as_str(),
+                    rule.protocol.as_str(),
+                    rule.local_address,
+                    rule.local_port,
+                    rule.remote_address,
+                    rule.remote_port,
+                    rule.interface,
+                    bool_value(rule.log),
+                    now,
+                    rule.id,
+                ],
+            )
+            .map_err(db)?;
+        if changed == 0 {
+            return Err(Error::Firewall(format!(
+                "firewall rule not found: {}",
+                rule.id
+            )));
+        }
+        bump_firewall_generation(&tx)?;
+        tx.commit().map_err(db)?;
+        self.get_firewall_rule(rule.id)?
+            .ok_or_else(|| Error::Database("firewall rule update failed".into()))
+    }
+
+    pub fn delete_firewall_rule(&self, id: i64) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let deleted = tx
+            .execute("DELETE FROM firewall_rules WHERE id = ?1", params![id])
+            .map_err(db)?;
+        if deleted > 0 {
+            bump_firewall_generation(&tx)?;
+        }
+        tx.commit().map_err(db)?;
+        Ok(deleted > 0)
+    }
+
+    pub fn reorder_firewall_rules(&self, ids: &[i64]) -> Result<Vec<FirewallRule>> {
+        let expected = self.count_firewall_rules()?;
+        if ids.len() as u64 != expected {
+            return Err(Error::Firewall(format!(
+                "reorder must include all {expected} firewall rules"
+            )));
+        }
+        let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
+        if unique.len() != ids.len() {
+            return Err(Error::Firewall(
+                "reorder contains duplicate firewall rule ids".into(),
+            ));
+        }
+
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let now = unix_now();
+        for (priority, id) in ids.iter().enumerate() {
+            let changed = tx
+                .execute(
+                    "UPDATE firewall_rules SET priority = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![priority as i64, now, id],
+                )
+                .map_err(db)?;
+            if changed == 0 {
+                return Err(Error::Firewall(format!("firewall rule not found: {id}")));
+            }
+        }
+        bump_firewall_generation(&tx)?;
+        tx.commit().map_err(db)?;
+        self.list_firewall_rules()
+    }
+
+    pub fn get_firewall_state(&self) -> Result<FirewallState> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT enabled, mode, generation, applied_generation,
+                        applied_at, last_error, pf_enabled_by_pigui
+                 FROM firewall_state WHERE id = 1",
+                [],
+                firewall_state_from_row,
+            )
+            .optional()
+            .map_err(db)?
+            .unwrap_or_default())
+    }
+
+    pub fn save_firewall_state(&self, state: &FirewallState) -> Result<FirewallState> {
+        let current = self.get_firewall_state()?;
+        let dirty = current.enabled != state.enabled || current.mode != state.mode;
+        self.conn
+            .execute(
+                "UPDATE firewall_state SET
+                     enabled = ?1, mode = ?2, applied_generation = ?3,
+                     applied_at = ?4, last_error = ?5, pf_enabled_by_pigui = ?6,
+                     generation = generation + ?7, updated_at = ?8
+                 WHERE id = 1",
+                params![
+                    bool_value(state.enabled),
+                    state.mode.as_str(),
+                    state.applied_generation,
+                    state.applied_at,
+                    state.last_error,
+                    bool_value(state.pf_enabled_by_pigui),
+                    i64::from(dirty),
+                    unix_now(),
+                ],
+            )
+            .map_err(db)?;
+        self.get_firewall_state()
+    }
+
+    pub fn add_firewall_block(&self, block: &FirewallBlock, now: i64) -> Result<FirewallBlock> {
+        let block = block.normalized()?;
+        let expires_at = now.saturating_add(block.ttl_secs);
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        tx.execute(
+            "INSERT INTO firewall_blocks (
+                 address, direction, ttl_secs, reason, source, created_at, expires_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(address, direction) DO UPDATE SET
+                 ttl_secs = excluded.ttl_secs,
+                 reason = excluded.reason,
+                 source = excluded.source,
+                 expires_at = excluded.expires_at",
+            params![
+                block.address,
+                block.direction.as_str(),
+                block.ttl_secs,
+                block.reason,
+                block.source,
+                now,
+                expires_at,
+            ],
+        )
+        .map_err(db)?;
+        tx.commit().map_err(db)?;
+        self.conn
+            .query_row(
+                "SELECT id, address, direction, ttl_secs, reason, source,
+                        created_at, expires_at
+                 FROM firewall_blocks
+                 WHERE address = ?1 AND direction = ?2",
+                params![block.address, block.direction.as_str()],
+                firewall_block_from_row,
+            )
+            .map_err(db)
+    }
+
+    pub fn list_firewall_blocks(&self, now: i64) -> Result<Vec<FirewallBlock>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, address, direction, ttl_secs, reason, source,
+                        created_at, expires_at
+                 FROM firewall_blocks
+                 WHERE expires_at > ?1
+                 ORDER BY expires_at ASC, id ASC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![now], firewall_block_from_row)
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn count_firewall_blocks(&self, now: i64) -> Result<u64> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM firewall_blocks WHERE expires_at > ?1",
+                params![now],
+                |row| row.get(0),
+            )
+            .map_err(db)?;
+        Ok(count as u64)
+    }
+
+    pub fn get_firewall_block(&self, id: i64) -> Result<Option<FirewallBlock>> {
+        self.conn
+            .query_row(
+                "SELECT id, address, direction, ttl_secs, reason, source,
+                        created_at, expires_at
+                 FROM firewall_blocks WHERE id = ?1",
+                params![id],
+                firewall_block_from_row,
+            )
+            .optional()
+            .map_err(db)
+    }
+
+    pub fn find_firewall_block(
+        &self,
+        address: &str,
+        direction: Direction,
+    ) -> Result<Option<FirewallBlock>> {
+        let address = normalize_address(address)?
+            .ok_or_else(|| Error::Firewall("block address must not be any".into()))?;
+        self.conn
+            .query_row(
+                "SELECT id, address, direction, ttl_secs, reason, source,
+                        created_at, expires_at
+                 FROM firewall_blocks
+                 WHERE address = ?1 AND direction = ?2",
+                params![address, direction.as_str()],
+                firewall_block_from_row,
+            )
+            .optional()
+            .map_err(db)
+    }
+
+    pub fn expired_firewall_blocks(&self, now: i64) -> Result<Vec<FirewallBlock>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, address, direction, ttl_secs, reason, source,
+                        created_at, expires_at
+                 FROM firewall_blocks
+                 WHERE expires_at <= ?1
+                 ORDER BY expires_at ASC, id ASC",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![now], firewall_block_from_row)
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    pub fn delete_all_firewall_rules(&self) -> Result<u64> {
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let deleted = tx.execute("DELETE FROM firewall_rules", []).map_err(db)?;
+        if deleted > 0 {
+            bump_firewall_generation(&tx)?;
+        }
+        tx.commit().map_err(db)?;
+        Ok(deleted as u64)
+    }
+
+    pub fn remove_firewall_block(&self, id: i64) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM firewall_blocks WHERE id = ?1", params![id])
+            .map_err(db)?;
+        Ok(deleted > 0)
+    }
+
+    pub fn remove_firewall_block_by_address(
+        &self,
+        address: &str,
+        direction: Direction,
+    ) -> Result<bool> {
+        let address = normalize_address(address)?
+            .ok_or_else(|| Error::Firewall("block address must not be any".into()))?;
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM firewall_blocks WHERE address = ?1 AND direction = ?2",
+                params![address, direction.as_str()],
+            )
+            .map_err(db)?;
+        Ok(deleted > 0)
+    }
+
+    pub fn prune_firewall_blocks(&self, now: i64) -> Result<Vec<FirewallBlock>> {
+        let tx = self.conn.unchecked_transaction().map_err(db)?;
+        let expired = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT id, address, direction, ttl_secs, reason, source,
+                            created_at, expires_at
+                     FROM firewall_blocks
+                     WHERE expires_at <= ?1
+                     ORDER BY expires_at ASC, id ASC",
+                )
+                .map_err(db)?;
+            statement
+                .query_map(params![now], firewall_block_from_row)
+                .map_err(db)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db)?
+        };
+        tx.execute(
+            "DELETE FROM firewall_blocks WHERE expires_at <= ?1",
+            params![now],
+        )
+        .map_err(db)?;
+        tx.commit().map_err(db)?;
+        Ok(expired)
+    }
+
+    pub fn clear_firewall_blocks(&self) -> Result<u64> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM firewall_blocks", [])
+            .map_err(db)?;
+        Ok(deleted as u64)
+    }
+
+    pub fn record_firewall_audit(&self, entry: &FirewallAuditEntry) -> Result<FirewallAuditEntry> {
+        let mut entry = entry.normalized()?;
+        if entry.ts == 0 {
+            entry.ts = unix_now();
+        }
+        self.conn
+            .execute(
+                "INSERT INTO firewall_audit (
+                     ts, actor, action, rule_id, detail, result, error
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    entry.ts,
+                    entry.actor,
+                    entry.action,
+                    entry.rule_id,
+                    entry.detail,
+                    entry.result,
+                    entry.error,
+                ],
+            )
+            .map_err(db)?;
+        entry.id = self.conn.last_insert_rowid();
+        Ok(entry)
+    }
+
+    pub fn list_firewall_audit(&self, limit: u32) -> Result<Vec<FirewallAuditEntry>> {
+        let limit = limit.clamp(1, 1000);
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, ts, actor, action, rule_id, detail, result, error
+                 FROM firewall_audit
+                 ORDER BY ts DESC, id DESC
+                 LIMIT ?1",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![i64::from(limit)], firewall_audit_from_row)
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+}
+
+fn bump_firewall_generation(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    tx.execute(
+        "UPDATE firewall_state SET generation = generation + 1, updated_at = ?1
+         WHERE id = 1",
+        params![unix_now()],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+fn bool_value(value: bool) -> i64 {
+    i64::from(value)
+}
+
+fn invalid_firewall_value(column: usize, value: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        column,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid firewall value: {value}"),
+        )),
+    )
+}
+
+fn firewall_rule_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FirewallRule> {
+    let action: String = row.get(3)?;
+    let direction: String = row.get(4)?;
+    let protocol: String = row.get(5)?;
+    Ok(FirewallRule {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        enabled: row.get::<_, i64>(2)? != 0,
+        action: RuleAction::parse(&action).ok_or_else(|| invalid_firewall_value(3, &action))?,
+        direction: Direction::parse(&direction)
+            .ok_or_else(|| invalid_firewall_value(4, &direction))?,
+        protocol: Protocol::parse(&protocol).ok_or_else(|| invalid_firewall_value(5, &protocol))?,
+        local_address: row.get(6)?,
+        local_port: row.get(7)?,
+        remote_address: row.get(8)?,
+        remote_port: row.get(9)?,
+        interface: row.get(10)?,
+        log: row.get::<_, i64>(11)? != 0,
+        priority: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+
+fn firewall_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FirewallState> {
+    let mode: String = row.get(1)?;
+    Ok(FirewallState {
+        enabled: row.get::<_, i64>(0)? != 0,
+        mode: FirewallMode::parse(&mode).ok_or_else(|| invalid_firewall_value(1, &mode))?,
+        generation: row.get(2)?,
+        applied_generation: row.get(3)?,
+        applied_at: row.get(4)?,
+        last_error: row.get(5)?,
+        pf_enabled_by_pigui: row.get::<_, i64>(6)? != 0,
+    })
+}
+
+fn firewall_block_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FirewallBlock> {
+    let direction: String = row.get(2)?;
+    Ok(FirewallBlock {
+        id: row.get(0)?,
+        address: row.get(1)?,
+        direction: Direction::parse(&direction)
+            .ok_or_else(|| invalid_firewall_value(2, &direction))?,
+        ttl_secs: row.get(3)?,
+        reason: row.get(4)?,
+        source: row.get(5)?,
+        created_at: row.get(6)?,
+        expires_at: row.get(7)?,
+    })
+}
+
+fn firewall_audit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FirewallAuditEntry> {
+    Ok(FirewallAuditEntry {
+        id: row.get(0)?,
+        ts: row.get(1)?,
+        actor: row.get(2)?,
+        action: row.get(3)?,
+        rule_id: row.get(4)?,
+        detail: row.get(5)?,
+        result: row.get(6)?,
+        error: row.get(7)?,
+    })
+}
+
 const SETTINGS_KEY: &str = "app";
 
 fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
@@ -2514,6 +3126,18 @@ fn ensure_endpoints_hostname(conn: &SqlConnection) -> Result<()> {
         conn.execute("ALTER TABLE endpoints ADD COLUMN hostname TEXT", [])
             .map_err(db)?;
     }
+    Ok(())
+}
+
+fn ensure_firewall_state(conn: &SqlConnection) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO firewall_state (
+             id, enabled, mode, generation, applied_generation, applied_at,
+             last_error, pf_enabled_by_pigui, updated_at
+         ) VALUES (1, 0, 'blocklist', 0, 0, NULL, NULL, 0, ?1)",
+        params![unix_now()],
+    )
+    .map_err(db)?;
     Ok(())
 }
 
@@ -3220,8 +3844,10 @@ fn register_default_trust(conn: &SqlConnection) -> Result<()> {
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |context| {
-            let domain: String = context.get(0)?;
-            Ok(crate::trust_list::default_trust_state(&domain)
+            let domain: Option<String> = context.get(0)?;
+            Ok(domain
+                .as_deref()
+                .and_then(crate::trust_list::default_trust_state)
                 .map(|state| state.as_str().to_string()))
         },
     )
@@ -3428,8 +4054,11 @@ mod tests {
             extractor(
                 r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"203.0.113.53","id.resp_p":53,"proto":"udp","query":"unlisted-pigui-test.example","qtype_name":"A","rcode_name":"NOERROR","answers":"203.0.113.9","TTLs":"300"}"#,
             ),
+            extractor(
+                r#"{"ts":1002,"id.orig_h":"10.0.0.5","id.resp_h":"203.0.113.53","id.resp_p":53,"proto":"udp","qtype_name":"A","rcode_name":"NOERROR"}"#,
+            ),
         ];
-        store.insert_extractor_records(&records, 1001).unwrap();
+        store.insert_extractor_records(&records, 1002).unwrap();
 
         let observations = store.list_dns_query(&ListQuery::default()).unwrap();
         let spotify = observations
@@ -3442,6 +4071,11 @@ mod tests {
             .find(|observation| observation.query.as_deref() == Some("unlisted-pigui-test.example"))
             .unwrap();
         assert_eq!(unlisted.trust_state, TrustState::Unknown);
+        let missing_query = observations
+            .iter()
+            .find(|observation| observation.query.is_none())
+            .unwrap();
+        assert_eq!(missing_query.trust_state, TrustState::Unknown);
 
         store
             .set_domain_trust("spotify.com", TrustState::Suspicious, None)
@@ -3890,5 +4524,224 @@ mod tests {
         };
         assert_eq!(store.list_alerts_query(&filtered).unwrap().len(), 1);
         assert_eq!(store.count_alerts_query(&filtered).unwrap(), 1);
+    }
+
+    fn firewall_rule(name: &str, action: RuleAction, direction: Direction) -> FirewallRule {
+        FirewallRule {
+            id: 0,
+            name: name.into(),
+            enabled: true,
+            action,
+            direction,
+            protocol: Protocol::Tcp,
+            local_address: None,
+            local_port: None,
+            remote_address: Some("192.0.2.10".into()),
+            remote_port: Some("22".into()),
+            interface: None,
+            log: true,
+            priority: 0,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn firewall_rule_crud_generation_and_reorder() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.get_firewall_state().unwrap().generation, 0);
+
+        let first = store
+            .create_firewall_rule(&firewall_rule(
+                "block ssh",
+                RuleAction::Block,
+                Direction::Inbound,
+            ))
+            .unwrap();
+        assert!(first.id > 0);
+        assert_eq!(first.priority, 0);
+        assert!(first.created_at > 0);
+        assert_eq!(store.count_firewall_rules().unwrap(), 1);
+        assert_eq!(store.get_firewall_state().unwrap().generation, 1);
+
+        let second = store
+            .create_firewall_rule(&firewall_rule(
+                "allow dns",
+                RuleAction::Allow,
+                Direction::Outbound,
+            ))
+            .unwrap();
+        assert_eq!(second.priority, 1);
+        assert_eq!(store.get_firewall_state().unwrap().generation, 2);
+
+        let mut updated = first.clone();
+        updated.name = "block ssh harder".into();
+        updated.enabled = false;
+        let updated = store.update_firewall_rule(&updated).unwrap();
+        assert_eq!(updated.name, "block ssh harder");
+        assert!(!updated.enabled);
+        assert_eq!(store.get_firewall_state().unwrap().generation, 3);
+
+        let reordered = store
+            .reorder_firewall_rules(&[second.id, first.id])
+            .unwrap();
+        assert_eq!(reordered[0].id, second.id);
+        assert_eq!(reordered[0].priority, 0);
+        assert_eq!(reordered[1].id, first.id);
+        assert_eq!(reordered[1].priority, 1);
+        assert_eq!(store.get_firewall_state().unwrap().generation, 4);
+        assert!(store.reorder_firewall_rules(&[second.id]).is_err());
+
+        assert!(store.delete_firewall_rule(first.id).unwrap());
+        assert!(!store.delete_firewall_rule(first.id).unwrap());
+        assert_eq!(store.count_firewall_rules().unwrap(), 1);
+        assert_eq!(store.get_firewall_state().unwrap().generation, 5);
+
+        assert_eq!(store.delete_all_firewall_rules().unwrap(), 1);
+        assert_eq!(store.count_firewall_rules().unwrap(), 0);
+        assert_eq!(store.get_firewall_state().unwrap().generation, 6);
+    }
+
+    #[test]
+    fn firewall_state_save_bumps_generation_only_for_mode_changes() {
+        let store = Store::open_in_memory().unwrap();
+        let mut state = store.get_firewall_state().unwrap();
+        state.enabled = true;
+        state.mode = FirewallMode::Policy;
+        let saved = store.save_firewall_state(&state).unwrap();
+        assert!(saved.enabled);
+        assert_eq!(saved.mode, FirewallMode::Policy);
+        assert_eq!(saved.generation, 1);
+        assert!(saved.needs_apply());
+
+        state = saved;
+        state.applied_generation = state.generation;
+        state.applied_at = Some(123);
+        state.last_error = Some("test".into());
+        state.pf_enabled_by_pigui = true;
+        let saved = store.save_firewall_state(&state).unwrap();
+        assert_eq!(saved.generation, 1);
+        assert_eq!(saved.applied_generation, 1);
+        assert_eq!(saved.applied_at, Some(123));
+        assert_eq!(saved.last_error.as_deref(), Some("test"));
+        assert!(saved.pf_enabled_by_pigui);
+        assert!(!saved.needs_apply());
+    }
+
+    #[test]
+    fn firewall_blocks_upsert_list_remove_and_prune() {
+        let store = Store::open_in_memory().unwrap();
+        let block = FirewallBlock {
+            id: 0,
+            address: "192.0.2.10".into(),
+            direction: Direction::Both,
+            ttl_secs: 60,
+            reason: Some("manual".into()),
+            source: "manual".into(),
+            created_at: 0,
+            expires_at: 0,
+        };
+        let first = store.add_firewall_block(&block, 1_000).unwrap();
+        assert!(first.id > 0);
+        assert_eq!(first.expires_at, 1_060);
+        assert_eq!(store.count_firewall_blocks(1_001).unwrap(), 1);
+        assert_eq!(
+            store.get_firewall_block(first.id).unwrap().unwrap().id,
+            first.id
+        );
+        assert_eq!(
+            store
+                .find_firewall_block("192.0.2.10", Direction::Both)
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+
+        let mut longer = block.clone();
+        longer.ttl_secs = 120;
+        longer.reason = Some("extended".into());
+        let extended = store.add_firewall_block(&longer, 1_010).unwrap();
+        assert_eq!(extended.id, first.id);
+        assert_eq!(extended.expires_at, 1_130);
+        assert_eq!(extended.reason.as_deref(), Some("extended"));
+
+        let mut other = block.clone();
+        other.address = "198.51.100.20".into();
+        other.ttl_secs = 30;
+        let other = store.add_firewall_block(&other, 1_000).unwrap();
+        assert_eq!(store.count_firewall_blocks(1_001).unwrap(), 2);
+
+        let expiring = store.expired_firewall_blocks(1_100).unwrap();
+        assert_eq!(expiring.len(), 1);
+        assert_eq!(expiring[0].id, other.id);
+
+        let expired = store.prune_firewall_blocks(1_100).unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].id, other.id);
+        assert_eq!(store.count_firewall_blocks(1_100).unwrap(), 1);
+
+        assert!(
+            store
+                .remove_firewall_block_by_address("192.0.2.10", Direction::Both)
+                .unwrap()
+        );
+        assert!(!store.remove_firewall_block(first.id).unwrap());
+        assert_eq!(store.count_firewall_blocks(1_100).unwrap(), 0);
+
+        store.add_firewall_block(&block, 1_100).unwrap();
+        assert_eq!(store.count_firewall_blocks(1_100).unwrap(), 1);
+        assert_eq!(store.clear_firewall_blocks().unwrap(), 1);
+    }
+
+    #[test]
+    fn firewall_audit_records_and_lists_newest_first() {
+        let store = Store::open_in_memory().unwrap();
+        let first = store
+            .record_firewall_audit(&FirewallAuditEntry {
+                id: 0,
+                ts: 100,
+                actor: "test".into(),
+                action: "apply".into(),
+                rule_id: Some(1),
+                detail: Some("first".into()),
+                result: "ok".into(),
+                error: None,
+            })
+            .unwrap();
+        assert!(first.id > 0);
+        let second = store
+            .record_firewall_audit(&FirewallAuditEntry {
+                id: 0,
+                ts: 200,
+                actor: "test".into(),
+                action: "delete".into(),
+                rule_id: None,
+                detail: None,
+                result: "failed".into(),
+                error: Some("nope".into()),
+            })
+            .unwrap();
+        assert!(second.id > first.id);
+
+        let entries = store.list_firewall_audit(10).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].action, "delete");
+        assert_eq!(entries[1].action, "apply");
+        assert_eq!(store.list_firewall_audit(0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn schema_version_is_seven() {
+        let store = Store::open_in_memory().unwrap();
+        let version: String = store
+            .conn
+            .query_row(
+                "SELECT value FROM schema_meta WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "7");
     }
 }

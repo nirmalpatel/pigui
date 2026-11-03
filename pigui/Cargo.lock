@@ -453,6 +453,7 @@ dependencies = [
  "dns-lookup",
  "pigui-collector",
  "pigui-core",
+ "pigui-firewall",
  "pigui-snort",
  "rusqlite",
  "serde",
@@ -470,6 +471,7 @@ version = "0.1.1"
 dependencies = [
  "pigui-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
