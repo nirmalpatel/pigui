@@ -9,6 +9,8 @@ manager daemon, a privileged firewall helper, and an Activity Monitor-style GUI.
 
 ## What's changed
 
+- Ships the Tranco top-1M list as the default trusted-domain list. User trust
+  overrides still take precedence.
 - Refreshed the GUI with sortable tables and paginated views.
 - Added a Settings page and streamlined development/production configuration
   parity.
@@ -57,7 +59,7 @@ spctl -a -vvv -t install PIGUI-0.1.1-macos-arm64.dmg
 SHA-256:
 
 ```text
-241d05eb86d497d24717a1594813801b8352a139948e8812833bfd6d76d42392
+5cd3e1988b7142842be45915fedb44b6707da549cb613587f071e3d9a03e0824
 ```
 
 ## Known limitations

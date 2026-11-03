@@ -5,10 +5,11 @@
 ```text
 File:               PIGUI-0.1.1-macos-arm64.dmg
 Path:               target/macos/PIGUI-0.1.1-macos-arm64.dmg
-SHA-256:            241d05eb86d497d24717a1594813801b8352a139948e8812833bfd6d76d42392
+SHA-256:            5cd3e1988b7142842be45915fedb44b6707da549cb613587f071e3d9a03e0824
+Size:               37698448 bytes
 Arch:               arm64
 Min macOS:          14.0
-App build commit:   e1f49bc98
+App build commit:   c155d85d1
 Release tag:        pigui-v0.1.1
 ```
 
@@ -24,8 +25,8 @@ by this rebuild; only the artifact and hashes above are released.
 ```text
 Team ID:                 HQ9NP5ZSL5
 Signing identity:        Developer ID Application: EDOPTIMIZE SOLUTIONS PRIVATE LIMITED (HQ9NP5ZSL5)
-App notary submission:   04fed08b-893d-474d-85e8-a7dc1c79ed48
-DMG notary submission:   fc62033c-4f06-444b-8acf-b8d7838e9984
+App notary submission:   0922d8d7-8fe6-430c-aff3-daf26a9fa17a
+DMG notary submission:   6b16e888-556c-4e4a-a9a0-bdacc61fe52b
 App notary status:       Accepted
 DMG notary status:       Accepted
 App staple:              verified
