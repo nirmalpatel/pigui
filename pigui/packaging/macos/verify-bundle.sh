@@ -30,6 +30,12 @@ do
   [ -e "$path" ] || fail "missing $path"
 done
 
+echo "checking helper version"
+BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")"
+HELPER_VERSION="$("$CONTENTS/MacOS/pigui-helper" --version)"
+[ "$HELPER_VERSION" = "$BUNDLE_VERSION" ] \
+  || fail "helper reports version $HELPER_VERSION, expected $BUNDLE_VERSION"
+
 echo "checking Mach-O dependencies"
 while IFS= read -r -d '' binary; do
   while IFS= read -r dependency; do

@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "pigui-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dotenvy",
  "psl",
@@ -2141,7 +2141,7 @@ dependencies = [
 
 [[package]]
 name = "pigui-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pigui-core",
  "serde",

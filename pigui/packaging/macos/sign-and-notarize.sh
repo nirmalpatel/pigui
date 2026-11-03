@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${1:?usage: sign-and-notarize.sh <PIGUI.app> [version]}"
-VERSION="${2:-0.1.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIGUI_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+APP_DIR="${1:?usage: sign-and-notarize.sh <PIGUI.app> [version]}"
+VERSION="${2:-$(awk -F'"' '/^version = / { print $2; exit }' "$PIGUI_ROOT/Cargo.toml")}"
 IDENTITY="${PIGUI_SIGN_IDENTITY:?PIGUI_SIGN_IDENTITY is required}"
 TEAM_ID="${PIGUI_TEAM_ID:-}"
 NOTARY_PROFILE="${PIGUI_NOTARY_PROFILE:-}"

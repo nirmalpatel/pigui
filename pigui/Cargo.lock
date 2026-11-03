@@ -330,7 +330,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "pigui-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "pigui-collector"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pigui-core",
  "serde",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "pigui-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dotenvy",
  "psl",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "pigui-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "pigui-firewall"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pigui-core",
  "serde",
@@ -390,14 +390,14 @@ dependencies = [
 
 [[package]]
 name = "pigui-helper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pigui-core",
 ]
 
 [[package]]
 name = "pigui-snort"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pigui-core",
  "serde",

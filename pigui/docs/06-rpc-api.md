@@ -153,7 +153,7 @@ current status:
   "helper": {
     "ok": true,
     "data": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "uid": 0,
       "capture_running": true,
       "snort_pid": 12345,

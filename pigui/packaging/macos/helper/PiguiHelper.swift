@@ -3,7 +3,13 @@ import Foundation
 import Security
 import SystemConfiguration
 
-private let helperVersion = "0.1.0"
+private let helperVersion: String = {
+    let value = Bundle.main.object(
+        forInfoDictionaryKey: "CFBundleShortVersionString"
+    ) as? String
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? "dev" : trimmed
+}()
 private let defaultServiceName = "com.pigui.helper"
 
 private func envValue(_ key: String) -> String? {
@@ -690,6 +696,11 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
 @main
 struct PiguiHelperMain {
     static func main() {
+        if CommandLine.arguments.contains("--version") {
+            print(helperVersion)
+            exit(0)
+        }
+
         let development = CommandLine.arguments.contains("--dev")
         if geteuid() != 0 && !development {
             FileHandle.standardError.write(Data("pigui-helper must run as root\n".utf8))

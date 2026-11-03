@@ -166,7 +166,7 @@ PIGUI_SIGN_IDENTITY="Developer ID Application: ..." \
 PIGUI_TEAM_ID="..." \
 PIGUI_NOTARY_PROFILE="pigui-notary" \
 PIGUI_NOTARIZE=1 \
-./packaging/macos/make-dmg.sh target/macos/PIGUI.app 0.1.0
+./packaging/macos/make-dmg.sh target/macos/PIGUI.app 0.1.1
 ```
 
 The unsigned app is written to `target/macos/PIGUI.app`. A signed build without
@@ -236,7 +236,7 @@ target/macos/PIGUI-<version>-macos-<arch>.dmg
 The DMG path is excluded by `.gitignore`. Commit its checksum and metadata, not
 the DMG itself. Release records live in
 [`../releases/`](../releases/README.md); the current macOS record is
-[`../releases/v0.1.0/macos-arm64.md`](../releases/v0.1.0/macos-arm64.md). Start
+[`../releases/v0.1.1/macos-arm64.md`](../releases/v0.1.1/macos-arm64.md). Start
 new releases from [`../releases/TEMPLATE/`](../releases/TEMPLATE/).
 
 ## What the app contains

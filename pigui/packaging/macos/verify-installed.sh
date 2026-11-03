@@ -12,8 +12,24 @@ fi
 
 echo "== App =="
 echo "path: $APP"
-/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist" 2>/dev/null \
-  | sed 's/^/version: /'
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist" 2>/dev/null)"
+echo "version: ${APP_VERSION:-unknown}"
+
+echo
+echo "== Helper =="
+HELPER_JSON="$("$CONTENTS/MacOS/pigui-helperctl" version 2>&1 || true)"
+HELPER_VERSION="$(printf '%s' "$HELPER_JSON" \
+  | python3 -c 'import json,sys; print((json.load(sys.stdin).get("data") or {}).get("version", ""))' 2>/dev/null || true)"
+if [ -z "$HELPER_VERSION" ]; then
+  echo "version: unavailable"
+  echo "helper may not be registered; run pigui-servicectl status"
+elif [ "$HELPER_VERSION" = "$APP_VERSION" ]; then
+  echo "version: $HELPER_VERSION (matches app)"
+else
+  echo "version: $HELPER_VERSION (MISMATCH: app is $APP_VERSION)"
+  echo "Re-register the helper so launchd loads the installed version."
+  exit 1
+fi
 
 echo
 echo "== Code signature =="

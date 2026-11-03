@@ -52,12 +52,12 @@ Package the macOS app (unsigned by default):
 See [packaging/macos/README.md](packaging/macos/README.md) for signing,
 notarization, and the SMAppService helper model. Release records live in
 [`packaging/releases/`](packaging/releases/README.md); the current macOS record
-is [v0.1.0](packaging/releases/v0.1.0/macos-arm64.md).
+is [v0.1.1](packaging/releases/v0.1.1/macos-arm64.md).
 
 Signed and notarized macOS builds are published on the
 [GitHub releases page](https://github.com/nirmalpatel/pigui/releases). The
-current release is `pigui-v0.1.0`; download
-`PIGUI-0.1.0-macos-arm64.dmg` and its `SHA256SUMS`.
+current release is `pigui-v0.1.1`; download
+`PIGUI-0.1.1-macos-arm64.dmg` and its `SHA256SUMS`.
 
 Development uses a temporary root LaunchDaemon to run the same Swift helper in
 `--dev` mode; capture flows through GUI -> daemon -> helper -> Snort. The
