@@ -196,6 +196,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         destination_count,
         degraded: state.capabilities.degraded_reasons(),
         environment: state.config.environment.clone(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         snort_running: snort.running,
         snort_pid: snort.pid,
         snort_interface: capture_interface.clone().or(snort.interface),

@@ -13,7 +13,7 @@ use pigui_core::rpc::{
     METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST,
     METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
     METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
-    METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
+    METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
 };
 use pigui_core::service::{self, ServiceAction};
 use pigui_core::settings::AppSettings;
@@ -47,39 +47,85 @@ fn daemon_binary() -> Result<PathBuf, String> {
     }
 }
 
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn service_status_json() -> Result<Value, String> {
+    let output = service::run(ServiceAction::Status).map_err(|error| error.to_string())?;
+    serde_json::from_str(&output).map_err(|error| format!("invalid service status: {error}"))
+}
+
+fn service_field(status: &Value, field: &str) -> String {
+    status
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 fn agent_service_enabled() -> bool {
-    service::run(ServiceAction::Status)
-        .map(|output| output.contains("\"agent\":\"enabled\""))
+    service_status_json()
+        .map(|status| service_field(&status, "agent") == "enabled")
         .unwrap_or(false)
 }
 
-fn start_daemon_if_needed() -> Result<String, String> {
-    let config = Config::load().map_err(|error| error.to_string())?;
-    if config.socket_path.exists() {
-        #[cfg(unix)]
-        let connected = std::os::unix::net::UnixStream::connect(&config.socket_path).is_ok();
-        #[cfg(not(unix))]
-        let connected = true;
-        if connected {
-            return Ok("daemon is already running".to_string());
+fn daemon_version(config: &Config) -> Result<String, String> {
+    let client = DaemonClient::new(&config.socket_path);
+    let value = client
+        .call(METHOD_STATUS, json!({}))
+        .map_err(|error| error.to_string())?;
+    Ok(value
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+fn helper_version() -> Result<String, String> {
+    let value = pigui_core::helper::version().map_err(|error| error.to_string())?;
+    Ok(value
+        .pointer("/data/version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+fn wait_for_daemon_version(
+    config: &Config,
+    expected: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let mut last_error = "daemon did not start".to_string();
+    while Instant::now() < deadline {
+        if config.socket_path.exists() {
+            match daemon_version(config) {
+                Ok(version) if version == expected => return Ok(version),
+                Ok(version) => {
+                    last_error = format!("daemon is version {version}, expected {expected}");
+                }
+                Err(error) => last_error = error,
+            }
         }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(last_error)
+}
+
+fn stop_daemon(config: &Config) {
+    let client = DaemonClient::new(&config.socket_path);
+    let _ = client.call(METHOD_SHUTDOWN, json!({}));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while config.socket_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if config.socket_path.exists() {
         let _ = std::fs::remove_file(&config.socket_path);
     }
+}
 
-    if agent_service_enabled() {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if config.socket_path.exists() {
-                return Ok("pigui-daemon started by the SMAppService agent".to_string());
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        return Err(format!(
-            "the SMAppService daemon agent is enabled but did not create {}; re-register the agent or check launchd",
-            config.socket_path.display()
-        ));
-    }
-
+fn start_daemon_process(config: &Config) -> Result<u32, String> {
     let daemon = daemon_binary()?;
     std::fs::create_dir_all(&config.log_dir).map_err(|error| error.to_string())?;
     let log_path = config.log_dir.join("daemon.log");
@@ -104,19 +150,140 @@ fn start_daemon_if_needed() -> Result<String, String> {
     let child = command
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", daemon.display()))?;
+    Ok(child.id())
+}
 
+fn start_direct_daemon_if_needed(config: &Config) -> Result<String, String> {
+    if config.socket_path.exists() {
+        #[cfg(unix)]
+        let connected = std::os::unix::net::UnixStream::connect(&config.socket_path).is_ok();
+        #[cfg(not(unix))]
+        let connected = true;
+        if connected {
+            return Ok("daemon is already running".to_string());
+        }
+        let _ = std::fs::remove_file(&config.socket_path);
+    }
+
+    let pid = start_daemon_process(config)?;
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if config.socket_path.exists() {
-            return Ok(format!("started pigui-daemon pid {}", child.id()));
+            return Ok(format!("started pigui-daemon pid {pid}"));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     Err(format!(
         "pigui-daemon started but did not create {}; see {}",
         config.socket_path.display(),
-        log_path.display()
+        config.log_dir.join("daemon.log").display()
     ))
+}
+
+fn ensure_daemon(config: &Config, expected: &str) -> Result<String, String> {
+    let mut stale = false;
+    if config.socket_path.exists() {
+        match daemon_version(config) {
+            Ok(version) if version == expected => return Ok(format!("running {version}")),
+            Ok(version) => {
+                stale = true;
+                eprintln!("PIGUI daemon is version {version}; expected {expected}");
+            }
+            Err(error) => {
+                stale = true;
+                eprintln!("PIGUI daemon did not respond: {error}");
+            }
+        }
+    }
+
+    if stale {
+        stop_daemon(config);
+    }
+
+    if agent_service_enabled() {
+        let should_restart_agent =
+            stale || wait_for_daemon_version(config, expected, Duration::from_secs(3)).is_err();
+        if should_restart_agent {
+            let _ = service::run(ServiceAction::UnregisterAgent);
+            service::run(ServiceAction::RegisterAgent).map_err(|error| error.to_string())?;
+        }
+        let version = wait_for_daemon_version(config, expected, Duration::from_secs(10))?;
+        return Ok(format!("running {version}"));
+    }
+
+    let pid = start_daemon_process(config)?;
+    let version = wait_for_daemon_version(config, expected, Duration::from_secs(5))?;
+    Ok(format!("started pid {pid}, running {version}"))
+}
+
+fn ensure_helper(expected: &str) -> Result<String, String> {
+    let status = service_status_json()?;
+    let helper_state = service_field(&status, "helper");
+    if helper_state != "enabled" && helper_state != "requires_approval" {
+        return Ok(format!("not registered ({helper_state})"));
+    }
+
+    let current = helper_version().unwrap_or_default();
+    if current == expected {
+        return Ok(format!("running {current}"));
+    }
+
+    eprintln!(
+        "PIGUI helper is version {}; expected {expected}",
+        if current.is_empty() {
+            "unknown"
+        } else {
+            &current
+        }
+    );
+    if !current.is_empty() {
+        let _ = pigui_core::helper::disable_capture();
+    }
+    let _ = service::run(ServiceAction::UnregisterHelper);
+    service::run(ServiceAction::RegisterHelper).map_err(|error| error.to_string())?;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok(version) = helper_version() {
+            if version == expected {
+                if let Ok(helper_status) = pigui_core::helper::status() {
+                    let running = helper_status
+                        .pointer("/data/capture_running")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if running {
+                        let _ = pigui_core::helper::disable_capture();
+                    }
+                }
+                return Ok(format!("running {version}"));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let state = service_status_json()
+        .map(|status| service_field(&status, "helper"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    if state == "requires_approval" {
+        return Err(
+            "PIGUI helper needs approval in System Settings > General > Login Items & Extensions"
+                .to_string(),
+        );
+    }
+    Err(format!(
+        "helper did not restart with version {expected} (service {state})"
+    ))
+}
+
+fn reconcile_services() -> Result<String, String> {
+    let config = Config::load().map_err(|error| error.to_string())?;
+    if config.environment != "prod" {
+        return start_direct_daemon_if_needed(&config);
+    }
+    let expected = app_version();
+    let daemon = ensure_daemon(&config, &expected)?;
+    let helper = ensure_helper(&expected)?;
+    Ok(format!("daemon: {daemon}; helper: {helper}"))
 }
 
 fn client() -> Result<DaemonClient, String> {
@@ -180,7 +347,37 @@ fn prune_now() -> Result<Value, String> {
 
 #[tauri::command]
 fn start_daemon() -> Result<String, String> {
-    start_daemon_if_needed()
+    reconcile_services()
+}
+
+#[tauri::command]
+fn service_reconcile() -> Result<String, String> {
+    reconcile_services()
+}
+
+#[tauri::command]
+fn service_versions() -> Result<Value, String> {
+    let config = Config::load().map_err(|error| error.to_string())?;
+    let status = service_status_json().unwrap_or(Value::Null);
+    let helper_state = service_field(&status, "helper");
+    let (daemon, helper) = if config.environment == "prod" {
+        let daemon = daemon_version(&config).unwrap_or_default();
+        let helper = if helper_state == "enabled" || helper_state == "requires_approval" {
+            helper_version().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        (daemon, helper)
+    } else {
+        (String::new(), String::new())
+    };
+    Ok(json!({
+        "app": app_version(),
+        "daemon": daemon,
+        "helper": helper,
+        "agent": service_field(&status, "agent"),
+        "helper_service": helper_state,
+    }))
 }
 
 #[tauri::command]
@@ -417,14 +614,16 @@ fn main() {
 
     tauri::Builder::default()
         .setup(|app| {
-            if let Err(error) = start_daemon_if_needed() {
-                eprintln!("could not start pigui-daemon: {error}");
+            if let Err(error) = reconcile_services() {
+                eprintln!("could not reconcile PIGUI services: {error}");
             }
             let _ = app;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             start_daemon,
+            service_reconcile,
+            service_versions,
             open_login_items_settings,
             service_status,
             service_register_agent,

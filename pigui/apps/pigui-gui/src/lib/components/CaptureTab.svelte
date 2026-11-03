@@ -14,11 +14,21 @@
 
   let serviceStatus = $state("");
   let serviceBusy = $state(false);
+  let serviceMessage = $state("");
+  let serviceVersions = $state<ServiceVersions>({});
   let captureInterface = $state("");
   let helperOutput = $state("");
   let helperBusy = $state(false);
 
   type ServiceField = "agent" | "helper" | "bundle";
+
+  type ServiceVersions = {
+    app?: string;
+    daemon?: string;
+    helper?: string;
+    agent?: string;
+    helper_service?: string;
+  };
 
   function telemetryState(status: StatusPayload): string {
     if (!status.capabilities.extractor) {
@@ -67,12 +77,38 @@
     }
   }
 
+  async function refreshVersions() {
+    try {
+      serviceVersions = await invoke<ServiceVersions>("service_versions");
+    } catch (cause) {
+      serviceVersions = { app: String(cause) };
+    }
+  }
+
   async function runServiceCommand(command: string) {
     serviceBusy = true;
     try {
       serviceStatus = await invoke<string>(command);
+      await refreshVersions();
+      await refreshHelper();
     } catch (cause) {
       serviceStatus = String(cause);
+    } finally {
+      serviceBusy = false;
+    }
+  }
+
+  async function repairServices() {
+    serviceBusy = true;
+    serviceMessage = "";
+    try {
+      serviceMessage = await invoke<string>("service_reconcile");
+      await refreshServices();
+      await refreshVersions();
+      await refreshHelper();
+      await onRefresh();
+    } catch (cause) {
+      serviceMessage = String(cause);
     } finally {
       serviceBusy = false;
     }
@@ -137,6 +173,7 @@
   onMount(() => {
     if (status.environment === "prod") {
       void refreshServices();
+      void refreshVersions();
     }
     void refreshHelper();
   });
@@ -148,6 +185,7 @@
     <span class="value">{status.environment}</span>
     <span class="hint">
       {status.environment === "prod" ? "packaged app" : "source checkout"}
+      · daemon {serviceVersions.daemon || status.version || "unknown"}
     </span>
   </article>
   <article class="card">
@@ -200,6 +238,9 @@
   <div class="panel-header">
     <h2>Background services</h2>
     <div class="actions">
+      <button type="button" onclick={() => void repairServices()} disabled={serviceBusy}>
+        Repair services
+      </button>
       <button type="button" onclick={() => void refreshServices()} disabled={serviceBusy}>
         Check again
       </button>
@@ -224,7 +265,13 @@
     <span class="pill" class:ok={serviceField(serviceStatus, "helper") === "enabled"}>
       capture helper: {serviceField(serviceStatus, "helper")}
     </span>
+    <span class="pill">app: {serviceVersions.app ?? "unknown"}</span>
+    <span class="pill">daemon: {serviceVersions.daemon || status.version || "unknown"}</span>
+    <span class="pill">helper: {serviceVersions.helper || "unknown"}</span>
   </div>
+  {#if serviceMessage}
+    <pre class="service-status">{serviceMessage}</pre>
+  {/if}
   <ol class="setup-steps">
     <li>Click <strong>Register helper</strong>.</li>
     <li>Click <strong>Open Login Items settings</strong> and approve PIGUI.</li>

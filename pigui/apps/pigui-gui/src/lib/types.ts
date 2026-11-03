@@ -113,6 +113,7 @@ export interface StatusPayload {
   destination_count: number;
   degraded: string[];
   environment: "dev" | "prod";
+  version?: string;
   snort_running: boolean;
   snort_pid?: number;
   snort_interface?: string;

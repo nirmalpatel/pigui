@@ -327,6 +327,8 @@ pub struct StatusPayload {
     #[serde(default)]
     pub environment: String,
     #[serde(default)]
+    pub version: String,
+    #[serde(default)]
     pub snort_running: bool,
     #[serde(default)]
     pub snort_pid: Option<u32>,

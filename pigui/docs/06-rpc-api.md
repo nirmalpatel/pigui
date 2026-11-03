@@ -108,6 +108,7 @@ through this API.
   "destination_count": 33,
   "degraded": [],
   "environment": "dev",
+  "version": "0.1.1",
   "snort_running": true,
   "snort_pid": 12345,
   "snort_interface": "en0",

@@ -124,6 +124,7 @@ async fn serves_status_alerts_and_destinations() {
     let client = DaemonClient::new(config.socket_path.clone());
 
     let status: StatusPayload = client.call_typed(METHOD_STATUS, json!({})).unwrap();
+    assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
     assert_eq!(status.alert_count, 5);
     assert_eq!(status.destination_count, 4);
     assert_eq!(status.tls_count, 1);

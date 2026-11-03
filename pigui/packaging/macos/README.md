@@ -109,6 +109,19 @@ helper; a DMG-only ticket is not enough for `SMAppService`.
 Release artifacts and their metadata live under `releases/`. Do not commit the
 DMG itself.
 
+## Upgrades and service reconciliation
+
+Replacing `PIGUI.app` does not automatically stop processes that are already
+running under `SMAppService`. On launch, PIGUI compares the app version with the
+running daemon and helper versions. If they differ, it stops capture, shuts down
+the old daemon, and re-registers the daemon agent and helper so launchd loads
+binaries from the new bundle.
+
+Capture is stopped during this repair and must be started again. If macOS asks
+for approval again, approve PIGUI in **System Settings > General > Login Items &
+Extensions**. The Capture tab shows app, daemon, and helper versions and includes
+a **Repair services** button.
+
 ## Release checklist
 
 1. Run formatting, tests, Clippy, and the GUI check.
