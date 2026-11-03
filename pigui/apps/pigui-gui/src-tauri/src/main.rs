@@ -64,6 +64,35 @@ fn service_field(status: &Value, field: &str) -> String {
         .to_string()
 }
 
+fn run_service_with_retry(action: ServiceAction, attempts: u32) -> Result<String, String> {
+    let mut last_error = "service command failed".to_string();
+    for attempt in 0..attempts {
+        match service::run(action) {
+            Ok(output) => return Ok(output),
+            Err(error) => {
+                last_error = error.to_string();
+                if attempt + 1 < attempts {
+                    std::thread::sleep(Duration::from_millis(750));
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+fn wait_for_service_state(field: &str, expected: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if service_status_json()
+            .map(|status| service_field(&status, field) == expected)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn agent_service_enabled() -> bool {
     service_status_json()
         .map(|status| service_field(&status, "agent") == "enabled")
@@ -204,8 +233,9 @@ fn ensure_daemon(config: &Config, expected: &str) -> Result<String, String> {
         let should_restart_agent =
             stale || wait_for_daemon_version(config, expected, Duration::from_secs(3)).is_err();
         if should_restart_agent {
-            let _ = service::run(ServiceAction::UnregisterAgent);
-            service::run(ServiceAction::RegisterAgent).map_err(|error| error.to_string())?;
+            let _ = run_service_with_retry(ServiceAction::UnregisterAgent, 3);
+            wait_for_service_state("agent", "not_registered", Duration::from_secs(5));
+            run_service_with_retry(ServiceAction::RegisterAgent, 5)?;
         }
         let version = wait_for_daemon_version(config, expected, Duration::from_secs(10))?;
         return Ok(format!("running {version}"));
@@ -239,8 +269,9 @@ fn ensure_helper(expected: &str) -> Result<String, String> {
     if !current.is_empty() {
         let _ = pigui_core::helper::disable_capture();
     }
-    let _ = service::run(ServiceAction::UnregisterHelper);
-    service::run(ServiceAction::RegisterHelper).map_err(|error| error.to_string())?;
+    let _ = run_service_with_retry(ServiceAction::UnregisterHelper, 3);
+    wait_for_service_state("helper", "not_registered", Duration::from_secs(5));
+    run_service_with_retry(ServiceAction::RegisterHelper, 5)?;
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
