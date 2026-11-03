@@ -4,6 +4,7 @@ export interface ListQueryState {
   q?: string;
   sort?: string;
   dir?: "asc" | "desc";
+  trust?: string;
 }
 
 export interface UiSettings {
@@ -111,6 +112,7 @@ export interface StatusPayload {
   parse_errors: number;
   alert_count: number;
   destination_count: number;
+  connection_count: number;
   degraded: string[];
   environment: "dev" | "prod";
   version?: string;
@@ -172,6 +174,7 @@ export interface DnsObservation {
   rcode?: string;
   answers?: string;
   ttl?: string;
+  trust_state: TrustState;
 }
 
 export interface DnsList {

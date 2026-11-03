@@ -8,12 +8,13 @@ use std::time::{Duration, Instant};
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
 use pigui_core::rpc::{
-    METHOD_ALERTS_LIST, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START, METHOD_CAPTURE_STATUS,
-    METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL,
-    METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST,
-    METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
-    METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
-    METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
+    METHOD_ALERTS_LIST, METHOD_CAPTURE_ENSURE, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START,
+    METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
+    METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
+    METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE,
+    METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET,
+    METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE, METHOD_SHUTDOWN, METHOD_STATUS,
+    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
 };
 use pigui_core::service::{self, ServiceAction};
 use pigui_core::settings::AppSettings;
@@ -249,7 +250,10 @@ fn ensure_daemon(config: &Config, expected: &str) -> Result<String, String> {
 fn ensure_helper(expected: &str) -> Result<String, String> {
     let status = service_status_json()?;
     let helper_state = service_field(&status, "helper");
-    if helper_state != "enabled" && helper_state != "requires_approval" {
+    if helper_state == "requires_approval" {
+        return Ok("requires approval in Login Items & Extensions".to_string());
+    }
+    if helper_state != "enabled" {
         return Ok(format!("not registered ({helper_state})"));
     }
 
@@ -312,7 +316,19 @@ fn reconcile_services() -> Result<String, String> {
         return start_direct_daemon_if_needed(&config);
     }
     let expected = app_version();
+
+    let status = service_status_json().unwrap_or(Value::Null);
+    if service_field(&status, "agent") == "not_registered" {
+        let _ = run_service_with_retry(ServiceAction::RegisterAgent, 3);
+    }
+
     let daemon = ensure_daemon(&config, &expected)?;
+
+    let status = service_status_json().unwrap_or(Value::Null);
+    if service_field(&status, "helper") == "not_registered" {
+        let _ = run_service_with_retry(ServiceAction::RegisterHelper, 3);
+    }
+
     let helper = ensure_helper(&expected)?;
     Ok(format!("daemon: {daemon}; helper: {helper}"))
 }
@@ -478,6 +494,13 @@ fn helper_disable_capture() -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn ensure_capture() -> Result<Value, String> {
+    client()?
+        .call(METHOD_CAPTURE_ENSURE, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_status() -> Result<Value, String> {
     client()?
         .call(METHOD_STATUS, json!({}))
@@ -579,12 +602,14 @@ fn list_domains(
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
+    trust: Option<String>,
 ) -> Result<Value, String> {
+    let mut params = list_params(limit, offset, q, sort, dir);
+    if let Some(trust) = trust {
+        params["trust"] = json!(trust);
+    }
     client()?
-        .call(
-            METHOD_DOMAINS_LIST,
-            list_params(limit, offset, q, sort, dir),
-        )
+        .call(METHOD_DOMAINS_LIST, params)
         .map_err(|error| error.to_string())
 }
 
@@ -665,6 +690,7 @@ fn main() {
             capture_status,
             helper_enable_capture,
             helper_disable_capture,
+            ensure_capture,
             get_status,
             get_settings,
             update_settings,

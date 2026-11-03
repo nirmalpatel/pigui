@@ -6,9 +6,11 @@
 
   let {
     status,
+    autoCaptureError = null,
     onRefresh,
   }: {
     status: StatusPayload;
+    autoCaptureError?: string | null;
     onRefresh: () => Promise<void>;
   } = $props();
 
@@ -29,6 +31,11 @@
     agent?: string;
     helper_service?: string;
   };
+
+  const helperState = $derived(serviceField(serviceStatus, "helper"));
+  const helperApprovalRequired = $derived(
+    helperState === "requires_approval" || serviceVersions.helper_service === "requires_approval",
+  );
 
   function telemetryState(status: StatusPayload): string {
     if (!status.capabilities.extractor) {
@@ -171,46 +178,41 @@
   }
 
   onMount(() => {
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (status.environment === "prod") {
       void refreshServices();
       void refreshVersions();
+      interval = setInterval(() => {
+        void refreshServices();
+        void refreshVersions();
+      }, 5000);
     }
     void refreshHelper();
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
   });
 </script>
 
 <section class="capture-grid">
   <article class="card">
-    <span class="label">Run mode</span>
-    <span class="value">{status.environment}</span>
-    <span class="hint">
-      {status.environment === "prod" ? "packaged app" : "source checkout"}
-      · daemon {serviceVersions.daemon || status.version || "unknown"}
+    <span class="label">Packet capture</span>
+    <span class="value" class:ok={status.capture_running} class:warn={!status.capture_running}>
+      {status.capture_running ? "running" : "starting"}
     </span>
+    <span class="hint">{captureModeLabel(status.capture_mode)} · {status.capture_interface ?? "auto"}</span>
   </article>
   <article class="card">
     <span class="label">Capture interface</span>
-    <span class="value">{status.capture_interface ?? status.snort_interface ?? "-"}</span>
-    <span class="hint">{status.capture_running ? "active capture interface" : "PIGUI_SNORT_INTERFACE"}</span>
+    <span class="value">{status.capture_interface ?? status.snort_interface ?? "auto-detect"}</span>
+    <span class="hint">{status.capture_running ? "active interface" : "selected automatically"}</span>
   </article>
   <article class="card">
     <span class="label">Snort process ID</span>
     <span class="value">{status.snort_pid ?? "-"}</span>
     <span class="hint">{status.capabilities.version ?? "unknown version"}</span>
-  </article>
-  <article class="card">
-    <span class="label">Snort control API</span>
-    <span class="value" class:ok={status.capabilities.control_socket}>
-      {status.capabilities.control_socket ? "available" : "unavailable"}
-    </span>
-    <span class="hint">optional; not used for capture</span>
-  </article>
-  <article class="card">
-    <span class="label">Packet capture</span>
-    <span class="value" class:ok={status.capture_running} class:warn={!status.capture_running}>
-      {status.capture_running ? "running" : "stopped"}
-    </span>
-    <span class="hint">{captureModeLabel(status.capture_mode)} · {status.capture_interface ?? "no interface"}</span>
   </article>
   <article class="card">
     <span class="label">Snort telemetry</span>
@@ -233,123 +235,105 @@
   </article>
 </section>
 
-{#if status.environment === "prod"}
 <section class="panel">
   <div class="panel-header">
-    <h2>Background services</h2>
-    <div class="actions">
-      <button type="button" onclick={() => void repairServices()} disabled={serviceBusy}>
-        Repair services
-      </button>
-      <button type="button" onclick={() => void refreshServices()} disabled={serviceBusy}>
-        Check again
-      </button>
-      <button type="button" onclick={() => void openLoginItemsSettings()}>
-        Open Login Items settings
-      </button>
-      <button type="button" onclick={() => void runServiceCommand("service_register_agent")} disabled={serviceBusy}>
-        Register daemon
-      </button>
-      <button type="button" onclick={() => void runServiceCommand("service_register_helper")} disabled={serviceBusy}>
-        Register capture helper
-      </button>
-      <button type="button" onclick={() => void runServiceCommand("service_unregister_helper")} disabled={serviceBusy}>
-        Unregister capture helper
-      </button>
-    </div>
+    <h2>Capture</h2>
+    {#if helperApprovalRequired}
+      <div class="actions">
+        <button type="button" onclick={() => void openLoginItemsSettings()}>
+          Approve in System Settings
+        </button>
+      </div>
+    {/if}
   </div>
-  <div class="service-state">
-    <span class="pill" class:ok={serviceField(serviceStatus, "agent") === "enabled"}>
-      daemon service: {serviceField(serviceStatus, "agent")}
-    </span>
-    <span class="pill" class:ok={serviceField(serviceStatus, "helper") === "enabled"}>
-      capture helper: {serviceField(serviceStatus, "helper")}
-    </span>
-    <span class="pill">app: {serviceVersions.app ?? "unknown"}</span>
-    <span class="pill">daemon: {serviceVersions.daemon || status.version || "unknown"}</span>
-    <span class="pill">helper: {serviceVersions.helper || "unknown"}</span>
-  </div>
-  {#if serviceMessage}
-    <pre class="service-status">{serviceMessage}</pre>
-  {/if}
-  <ol class="setup-steps">
-    <li>Click <strong>Register helper</strong>.</li>
-    <li>Click <strong>Open Login Items settings</strong> and approve PIGUI.</li>
-    <li>Click <strong>Check again</strong> until the helper shows <code>enabled</code>.</li>
-    <li>Return to Capture control and click <strong>Enable capture</strong>.</li>
-  </ol>
-  <p class="hint">
-    PIGUI never asks for your password. macOS owns approval; no credential
-    is passed to or stored by PIGUI. Local unsigned builds may return
-    <code>Operation not permitted</code>: use <code>scripts/run-dev.sh</code>
-    for development, or sign/notarize and install in <code>/Applications</code>.
-  </p>
-  <pre class="service-status">{formatServiceStatus(serviceStatus)}</pre>
-</section>
-{:else}
-<section class="panel">
-  <div class="panel-header">
-    <h2>Dev capture helper</h2>
-    <div class="actions">
-      <button type="button" onclick={() => void refreshHelper()} disabled={helperBusy}>
-        Refresh helper
-      </button>
-    </div>
-  </div>
-  <p class="hint">
-    <code>scripts/run-dev.sh</code> starts the same Swift helper as a temporary
-    root LaunchDaemon (<code>com.pigui.helper.dev</code>). SMAppService approval
-    is not required in development. Use <code>scripts/run-dev.sh --stop</code>
-    to stop the daemon and helper.
-  </p>
-  <pre class="service-status">{helperOutput || "checking dev helper..."}</pre>
-</section>
-{/if}
-
-<section class="panel">
-  <div class="panel-header">
-    <h2>Capture control</h2>
-    <div class="actions">
-      <input
-        type="text"
-        placeholder={status.capture_interface ?? status.snort_interface ?? "en0"}
-        bind:value={captureInterface}
-        aria-label="Capture interface"
-      />
-      <button type="button" onclick={() => void enableCapture()} disabled={helperBusy}>
-        Start capture
-      </button>
-      <button type="button" onclick={() => void disableCapture()} disabled={helperBusy}>
-        Stop capture
-      </button>
-      <button type="button" onclick={() => void refreshHelper()} disabled={helperBusy}>
-        Capture helper status
-      </button>
-    </div>
-  </div>
-  <p class="hint">
-    {#if status.environment === "prod"}
-      Capture requires the root helper to be registered and approved. The
-      helper stages Snort into a root-owned payload and starts it; the
-      unprivileged daemon only reads the resulting telemetry.
+  <p class="hint capture-message">
+    {#if status.capture_running}
+      Capture is running on {status.capture_interface ?? "the active interface"}. PIGUI started it automatically.
+    {:else if helperApprovalRequired}
+      macOS is waiting for approval. Approve PIGUI in Login Items &amp; Extensions; capture starts by itself afterwards.
+    {:else if autoCaptureError}
+      PIGUI could not start capture automatically: {autoCaptureError}
     {:else}
-      Capture is controlled by the daemon and started through the temporary
-      dev helper. Enable/disable exercises the same path used by the packaged
-      app, without SMAppService approval.
+      PIGUI is starting capture automatically. No action is required.
     {/if}
   </p>
-  <pre class="service-status">{helperOutput || "helper not queried"}</pre>
 </section>
 
 <section class="panel">
-  <div class="panel-header"><h2>Paths and diagnostics</h2></div>
-  <div class="paths">
-    <div><span class="label">database</span><code>{status.db_path}</code></div>
-    <div><span class="label">daemon socket</span><code>{status.socket_path}</code></div>
-    <div><span class="label">Snort alerts file</span><code>{status.alert_json}</code></div>
-    <div><span class="label">Snort telemetry file</span><code>{status.extractor_file}</code></div>
-    <div><span class="label">active config</span><code>{status.snort_config_path ?? status.capabilities.config_path ?? "-"}</code></div>
-    <div><span class="label">source config</span><code>{status.capabilities.config_path ?? "-"}</code></div>
-    <div><span class="label">config hash</span><code>{status.snort_config_hash ?? "-"}</code></div>
-  </div>
+  <details>
+    <summary>Advanced and diagnostics</summary>
+    <div class="advanced-body">
+      <div class="service-state">
+        <span class="pill" class:ok={helperState === "enabled"}>
+          setup: {helperState}
+        </span>
+        <span class="pill">app: {serviceVersions.app ?? "unknown"}</span>
+        <span class="pill">daemon: {serviceVersions.daemon || status.version || "unknown"}</span>
+        <span class="pill">helper: {serviceVersions.helper || "unknown"}</span>
+      </div>
+
+      {#if status.environment === "prod"}
+        <div class="actions">
+          <button type="button" onclick={() => void repairServices()} disabled={serviceBusy}>
+            Repair setup
+          </button>
+          <button type="button" onclick={() => void refreshServices()} disabled={serviceBusy}>
+            Check setup
+          </button>
+          <button type="button" onclick={() => void openLoginItemsSettings()}>
+            Open Login Items settings
+          </button>
+          <button type="button" onclick={() => void runServiceCommand("service_register_agent")} disabled={serviceBusy}>
+            Register daemon
+          </button>
+          <button type="button" onclick={() => void runServiceCommand("service_register_helper")} disabled={serviceBusy}>
+            Register capture helper
+          </button>
+          <button type="button" onclick={() => void runServiceCommand("service_unregister_helper")} disabled={serviceBusy}>
+            Unregister capture helper
+          </button>
+        </div>
+        {#if serviceMessage}
+          <pre class="service-status">{serviceMessage}</pre>
+        {/if}
+        <pre class="service-status">{formatServiceStatus(serviceStatus)}</pre>
+      {/if}
+
+      <div class="actions">
+        <input
+          type="text"
+          placeholder={status.capture_interface ?? status.snort_interface ?? "en0"}
+          bind:value={captureInterface}
+          aria-label="Capture interface"
+        />
+        <button type="button" onclick={() => void enableCapture()} disabled={helperBusy}>
+          Start capture
+        </button>
+        <button type="button" onclick={() => void disableCapture()} disabled={helperBusy}>
+          Stop capture
+        </button>
+        <button type="button" onclick={() => void refreshHelper()} disabled={helperBusy}>
+          Helper status
+        </button>
+      </div>
+
+      <p class="hint">
+        PIGUI never asks for your password. macOS owns helper approval; no credential
+        is passed to or stored by PIGUI.
+      </p>
+
+      <pre class="service-status">{helperOutput || "helper not queried"}</pre>
+
+      <div class="paths">
+        <div><span class="label">database</span><code>{status.db_path}</code></div>
+        <div><span class="label">daemon socket</span><code>{status.socket_path}</code></div>
+        <div><span class="label">Snort alerts file</span><code>{status.alert_json}</code></div>
+        <div><span class="label">Snort telemetry file</span><code>{status.extractor_file}</code></div>
+        <div><span class="label">active config</span><code>{status.snort_config_path ?? status.capabilities.config_path ?? "-"}</code></div>
+        <div><span class="label">source config</span><code>{status.capabilities.config_path ?? "-"}</code></div>
+        <div><span class="label">config hash</span><code>{status.snort_config_hash ?? "-"}</code></div>
+        <div><span class="label">Snort control API</span><code>{status.capabilities.control_socket ? "available" : "unavailable"}</code></div>
+      </div>
+    </div>
+  </details>
 </section>

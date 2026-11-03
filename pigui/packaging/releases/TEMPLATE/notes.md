@@ -19,11 +19,10 @@
 
 1. Open the DMG and drag `PIGUI.app` to `Applications`.
 2. Launch PIGUI from `/Applications`.
-3. Open the **Capture** tab.
-4. Click **Register helper**.
-5. Click **Open Login Items settings** and approve PIGUI.
-6. Click **Check again** until the helper shows `enabled`.
-7. Enter the capture interface, usually `en0`, and click **Enable capture**.
+3. If macOS asks, approve PIGUI in Login Items & Extensions.
+
+PIGUI registers its services, selects the default interface, and starts capture
+automatically. Manual controls are under **Capture → Advanced and diagnostics**.
 
 ## Verify the download
 

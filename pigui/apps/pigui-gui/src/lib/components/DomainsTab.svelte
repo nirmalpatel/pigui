@@ -43,6 +43,7 @@
       q: filter.trim() || undefined,
       sort: domainSort?.key,
       dir: domainSort?.direction,
+      trust: domainTrustFilter === "all" ? undefined : domainTrustFilter,
     });
   }
 
@@ -173,7 +174,7 @@
   <div class="panel-header">
     <h2>Domains <span class="hint">all evidence</span></h2>
     <div class="panel-tools">
-      <select bind:value={domainTrustFilter} aria-label="Trust filter">
+      <select bind:value={domainTrustFilter} onchange={emitQuery} aria-label="Trust filter">
         <option value="all">All domains</option>
         <option value="needs_review">Review</option>
         <option value="trusted">Trusted</option>

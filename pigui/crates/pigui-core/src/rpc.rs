@@ -28,6 +28,7 @@ pub const METHOD_QUIC_LIST: &str = "quic.list";
 pub const METHOD_SNORT_STATUS: &str = "snort.status";
 pub const METHOD_CAPTURE_STATUS: &str = "capture.status";
 pub const METHOD_CAPTURE_START: &str = "capture.start";
+pub const METHOD_CAPTURE_ENSURE: &str = "capture.ensure";
 pub const METHOD_CAPTURE_STOP: &str = "capture.stop";
 pub const METHOD_CAPTURE_HELPER_STATUS: &str = "capture.helper_status";
 pub const METHOD_SETTINGS_GET: &str = "settings.get";
@@ -114,6 +115,8 @@ pub struct ListQuery {
     pub sort: Option<String>,
     #[serde(default)]
     pub dir: Option<SortDirection>,
+    #[serde(default)]
+    pub trust: Option<String>,
 }
 
 pub type AlertsQuery = ListQuery;
@@ -323,6 +326,8 @@ pub struct StatusPayload {
     pub parse_errors: u64,
     pub alert_count: u64,
     pub destination_count: u64,
+    #[serde(default)]
+    pub connection_count: u64,
     pub degraded: Vec<String>,
     #[serde(default)]
     pub environment: String,

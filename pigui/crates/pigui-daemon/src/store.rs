@@ -581,8 +581,10 @@ SELECT d.registrable_domain,
 "#;
 
 const SELECT_DNS_BASE: &str = r#"
-SELECT id, ts, client_ip, query, qtype, rcode, answers, ttl
-FROM dns_observations
+SELECT o.id, o.ts, o.client_ip, o.query, o.qtype, o.rcode, o.answers, o.ttl,
+       COALESCE(t.state, default_domain_trust(registrable_host(o.query)), 'unknown')
+FROM dns_observations o
+LEFT JOIN domain_trust t ON t.registrable_domain = registrable_host(o.query)
 "#;
 
 const SELECT_TLS_BASE: &str = r#"
@@ -1483,12 +1485,16 @@ impl Store {
         let mut statement = self
             .conn
             .prepare(
-                "SELECT id, ts, client_ip, query, qtype, rcode, answers, ttl
-                 FROM dns_observations ORDER BY ts DESC, id DESC LIMIT ?1 OFFSET ?2",
+                "SELECT o.id, o.ts, o.client_ip, o.query, o.qtype, o.rcode, o.answers, o.ttl,
+                        COALESCE(t.state, default_domain_trust(registrable_host(o.query)), 'unknown')
+                 FROM dns_observations o
+                 LEFT JOIN domain_trust t ON t.registrable_domain = registrable_host(o.query)
+                 ORDER BY o.ts DESC, o.id DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(db)?;
         let rows = statement
             .query_map(params![limit, offset], |row| {
+                let trust: String = row.get(8)?;
                 Ok(DnsObservation {
                     id: row.get(0)?,
                     ts: row.get(1)?,
@@ -1498,6 +1504,7 @@ impl Store {
                     rcode: row.get(5)?,
                     answers: row.get(6)?,
                     ttl: row.get(7)?,
+                    trust_state: TrustState::parse(&trust).unwrap_or_default(),
                 })
             })
             .map_err(db)?;
@@ -1859,22 +1866,28 @@ impl Store {
     }
 
     pub fn list_dns_query(&self, q: &ListQuery) -> Result<Vec<DnsObservation>> {
-        let (filter, params) =
-            search_filter(&["query", "answers", "qtype", "rcode", "client_ip"], q, 3);
+        let (filter, params) = search_filter(
+            &["o.query", "o.answers", "o.qtype", "o.rcode", "o.client_ip"],
+            q,
+            3,
+        );
+        let trust = "COALESCE(t.state, default_domain_trust(registrable_host(o.query)), 'unknown')";
         let order = order_clause(
             q,
             &[
-                ("time", "ts"),
-                ("client", "client_ip"),
-                ("query", "query"),
-                ("type", "qtype"),
-                ("rcode", "rcode"),
-                ("answers", "answers"),
-                ("ttl", "CAST(ttl AS INTEGER)"),
+                ("time", "o.ts"),
+                ("client", "o.client_ip"),
+                ("query", "o.query"),
+                ("type", "o.qtype"),
+                ("rcode", "o.rcode"),
+                ("answers", "o.answers"),
+                ("ttl", "CAST(o.ttl AS INTEGER)"),
+                ("trust", trust),
             ],
-            "ts DESC, id DESC",
+            "o.ts DESC, o.id DESC",
         );
         self.list_query_rows(SELECT_DNS_BASE, &filter, &order, params, q, |row| {
+            let trust: String = row.get(8)?;
             Ok(DnsObservation {
                 id: row.get(0)?,
                 ts: row.get(1)?,
@@ -1884,13 +1897,17 @@ impl Store {
                 rcode: row.get(5)?,
                 answers: row.get(6)?,
                 ttl: row.get(7)?,
+                trust_state: TrustState::parse(&trust).unwrap_or_default(),
             })
         })
     }
 
     pub fn count_dns_query(&self, q: &ListQuery) -> Result<u64> {
-        let (filter, params) =
-            search_filter(&["query", "answers", "qtype", "rcode", "client_ip"], q, 1);
+        let (filter, params) = search_filter(
+            &["o.query", "o.answers", "o.qtype", "o.rcode", "o.client_ip"],
+            q,
+            1,
+        );
         self.count_query_rows(SELECT_DNS_BASE, &filter, params)
     }
 
@@ -2047,7 +2064,7 @@ impl Store {
     }
 
     pub fn list_domains_query(&self, q: &ListQuery) -> Result<Vec<DomainSummary>> {
-        let (filter, params) = search_filter(&["d.registrable_domain", "d.domain"], q, 3);
+        let (filter, params) = domain_filter(q, 3);
         let order = order_clause(
             q,
             &[
@@ -2114,7 +2131,7 @@ impl Store {
     }
 
     pub fn count_domains_query(&self, q: &ListQuery) -> Result<u64> {
-        let (filter, params) = search_filter(&["d.registrable_domain", "d.domain"], q, 1);
+        let (filter, params) = domain_filter(q, 1);
         let base = SELECT_DOMAIN_BASE.replace("/*FILTER*/", &filter);
         self.count_query_rows(&base, "", params)
     }
@@ -2811,6 +2828,33 @@ fn page_values(q: &ListQuery) -> (i64, i64) {
     )
 }
 
+fn domain_filter(q: &ListQuery, start_index: usize) -> (String, Vec<SqlValue>) {
+    let (mut filter, mut params) =
+        search_filter(&["d.registrable_domain", "d.domain"], q, start_index);
+    let Some(trust) = q
+        .trust
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all")
+    else {
+        return (filter, params);
+    };
+    let expression = "COALESCE(t.state, default_domain_trust(d.registrable_domain), 'unknown')";
+    let condition = if trust == "needs_review" {
+        format!("({expression} IN ('unknown', 'suspicious'))")
+    } else {
+        let index = start_index + params.len();
+        params.push(SqlValue::Text(trust.to_string()));
+        format!("{expression} = ?{index}")
+    };
+    filter = if filter.is_empty() {
+        format!("WHERE ({condition})")
+    } else {
+        format!("{filter} AND ({condition})")
+    };
+    (filter, params)
+}
+
 fn search_filter(columns: &[&str], q: &ListQuery, start_index: usize) -> (String, Vec<SqlValue>) {
     let Some(term) =
         q.q.as_deref()
@@ -3182,6 +3226,19 @@ fn register_default_trust(conn: &SqlConnection) -> Result<()> {
         },
     )
     .map_err(db)?;
+    conn.create_scalar_function(
+        "registrable_host",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let hostname: Option<String> = context.get(0)?;
+            Ok(hostname
+                .as_deref()
+                .and_then(normalize_hostname)
+                .map(|hostname| registrable_domain(&hostname)))
+        },
+    )
+    .map_err(db)?;
     Ok(())
 }
 
@@ -3359,6 +3416,80 @@ mod tests {
             .unwrap();
         assert_eq!(example.hostname.as_deref(), Some("example.com"));
         assert_eq!(store.endpoint_domains("93.184.216.34").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn resolves_dns_trust_from_tranco_and_user_overrides() {
+        let mut store = Store::open_in_memory().unwrap();
+        let records = vec![
+            extractor(
+                r#"{"ts":1000,"id.orig_h":"10.0.0.5","id.resp_h":"203.0.113.53","id.resp_p":53,"proto":"udp","query":"api.spotify.com","qtype_name":"A","rcode_name":"NOERROR","answers":"93.184.216.34","TTLs":"300"}"#,
+            ),
+            extractor(
+                r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"203.0.113.53","id.resp_p":53,"proto":"udp","query":"unlisted-pigui-test.example","qtype_name":"A","rcode_name":"NOERROR","answers":"203.0.113.9","TTLs":"300"}"#,
+            ),
+        ];
+        store.insert_extractor_records(&records, 1001).unwrap();
+
+        let observations = store.list_dns_query(&ListQuery::default()).unwrap();
+        let spotify = observations
+            .iter()
+            .find(|observation| observation.query.as_deref() == Some("api.spotify.com"))
+            .unwrap();
+        assert_eq!(spotify.trust_state, TrustState::Trusted);
+        let unlisted = observations
+            .iter()
+            .find(|observation| observation.query.as_deref() == Some("unlisted-pigui-test.example"))
+            .unwrap();
+        assert_eq!(unlisted.trust_state, TrustState::Unknown);
+
+        store
+            .set_domain_trust("spotify.com", TrustState::Suspicious, None)
+            .unwrap();
+        let observations = store.list_dns_query(&ListQuery::default()).unwrap();
+        let spotify = observations
+            .iter()
+            .find(|observation| observation.query.as_deref() == Some("api.spotify.com"))
+            .unwrap();
+        assert_eq!(spotify.trust_state, TrustState::Suspicious);
+    }
+
+    #[test]
+    fn filters_domains_by_trust_state() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .insert_extractor_records(
+                &[extractor(
+                    r#"{"ts":1000,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"api.spotify.com","version":"TLSv1.3","validation_status":"valid"}"#,
+                )],
+                1000,
+            )
+            .unwrap();
+        store
+            .insert_extractor_records(
+                &[extractor(
+                    r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.11","id.resp_p":443,"server_name":"unlisted-pigui-test.example","version":"TLSv1.3","validation_status":"valid"}"#,
+                )],
+                1001,
+            )
+            .unwrap();
+
+        let needs_review = ListQuery {
+            trust: Some("needs_review".into()),
+            ..Default::default()
+        };
+        let domains = store.list_domains_query(&needs_review).unwrap();
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].domain, "unlisted-pigui-test.example");
+        assert_eq!(store.count_domains_query(&needs_review).unwrap(), 1);
+
+        let trusted = ListQuery {
+            trust: Some("trusted".into()),
+            ..Default::default()
+        };
+        let domains = store.list_domains_query(&trusted).unwrap();
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].domain, "spotify.com");
     }
 
     #[test]
@@ -3746,6 +3877,7 @@ mod tests {
             q: None,
             sort: Some("time".into()),
             dir: Some(SortDirection::Asc),
+            ..Default::default()
         };
         let alerts = store.list_alerts_query(&query).unwrap();
         assert_eq!(alerts.len(), 2);

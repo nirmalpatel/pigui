@@ -141,6 +141,10 @@ back to `unknown` deletes the override and restores the bundled default. Updatin
 the default list requires a new PIGUI release; there is no runtime download or
 import command.
 
+DNS observations carry the resolved `trust_state` for their query hostname, using
+the same user-override → Tranco → unknown precedence. This is derived when the
+DNS list is queried and is not stored in `dns_observations`.
+
 ### Domain source precedence
 
 `endpoint_domains` keeps one row per `(ip, domain)` and records the strongest

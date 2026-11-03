@@ -41,6 +41,7 @@ Failure:
 | `snort.status` | `{}` | `SnortStatusPayload` |
 | `capture.status` | `{}` | `CaptureStatusPayload` |
 | `capture.start` | `{interface}` | `CaptureState` |
+| `capture.ensure` | `{}` | `CaptureState` |
 | `capture.stop` | `{}` | `true` |
 | `capture.helper_status` | `{}` | helper status JSON |
 | `alerts.list` | `{limit?, offset?}` | `AlertList` |
@@ -106,6 +107,7 @@ through this API.
   "parse_errors": 0,
   "alert_count": 120,
   "destination_count": 33,
+  "connection_count": 250,
   "degraded": [],
   "environment": "dev",
   "version": "0.1.1",
@@ -164,8 +166,10 @@ current status:
 }
 ```
 
-`capture.start` takes `{"interface":"en0"}`. `capture.stop` takes `{}`.
-`capture.helper_status` returns the raw helper response.
+`capture.start` takes `{"interface":"en0"}`. `capture.ensure` takes `{}`; it is
+idempotent, auto-selects the interface, and is used on app launch so users do not
+need a Start button. `capture.stop` takes `{}`. `capture.helper_status` returns
+the raw helper response.
 
 ### `HealthPayload`
 
@@ -435,7 +439,8 @@ registrable domain.
   "qtype": "A",
   "rcode": "NOERROR",
   "answers": "93.184.216.34",
-  "ttl": "300"
+  "ttl": "300",
+  "trust_state": "trusted"
 }
 ```
 

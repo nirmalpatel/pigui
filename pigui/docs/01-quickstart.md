@@ -138,9 +138,10 @@ shasum -a 256 -c SHA256SUMS
 spctl -a -vvv -t install PIGUI-<version>-macos-arm64.dmg
 ```
 
-Then launch PIGUI and use the **Capture** tab to register and approve the
-helper. macOS requires the app to be in `/Applications` for the
-`SMAppService` LaunchDaemon flow. The packaged app does not use `sudo`.
+Launch PIGUI from `/Applications`. PIGUI registers its background services and
+starts capture automatically. If macOS asks you to approve PIGUI in Login Items
+& Extensions, approve it once; capture starts by itself afterwards. The packaged
+app does not use `sudo`.
 
 See [`packaging/macos/README.md`](../packaging/macos/README.md) for packaging,
 signing, and notarization details.

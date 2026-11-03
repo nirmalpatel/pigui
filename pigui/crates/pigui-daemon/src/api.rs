@@ -7,8 +7,8 @@ use pigui_core::error::{Error, Result};
 use pigui_core::rpc::{
     AlertList, CaptureStartRequest, CaptureState, CaptureStatusPayload, ConnectionList,
     DestinationList, DestinationQuery, DnsList, DomainList, FlowList, HealthPayload, HttpList,
-    ListQuery, METHOD_ALERTS_LIST, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START,
-    METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
+    ListQuery, METHOD_ALERTS_LIST, METHOD_CAPTURE_ENSURE, METHOD_CAPTURE_HELPER_STATUS,
+    METHOD_CAPTURE_START, METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
     METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST,
     METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
@@ -98,6 +98,7 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
         }
         METHOD_CAPTURE_STATUS => capture_status(state).await,
         METHOD_CAPTURE_START => capture_start(state, request.params).await,
+        METHOD_CAPTURE_ENSURE => capture_ensure(state).await,
         METHOD_CAPTURE_STOP => capture_stop(state).await,
         METHOD_CAPTURE_HELPER_STATUS => capture_helper_status().await,
         METHOD_ALERTS_LIST => list_alerts(state, request.params),
@@ -138,6 +139,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
     let (
         alert_count,
         destination_count,
+        connection_count,
         active_flows,
         active_processes,
         dns_count,
@@ -149,6 +151,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         Ok((
             store.count_alerts()?,
             store.count_destinations()?,
+            store.count_connections()?,
             store.count_flows()?,
             store.count_processes()?,
             store.count_dns()?,
@@ -194,6 +197,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
             .load(std::sync::atomic::Ordering::Relaxed),
         alert_count,
         destination_count,
+        connection_count,
         degraded: state.capabilities.degraded_reasons(),
         environment: state.config.environment.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -275,6 +279,67 @@ async fn capture_start(state: &AppState, params: Value) -> Result<Value> {
     query_store(state, |store| store.save_capture_state(&capture))?;
     state.set_capture(Some(capture.clone()));
     Ok(serde_json::to_value(capture)?)
+}
+
+async fn capture_ensure(state: &AppState) -> Result<Value> {
+    let helper = capture_helper_status().await.ok();
+    if let Some(helper) = helper.as_ref() {
+        let running = helper
+            .pointer("/data/capture_running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if running {
+            if let Some(capture) = state.capture() {
+                return Ok(serde_json::to_value(capture)?);
+            }
+            let data = helper.get("data").cloned().unwrap_or(Value::Null);
+            let interface = data
+                .get("interface")
+                .and_then(Value::as_str)
+                .or(state.config.snort_interface.as_deref())
+                .unwrap_or("unknown")
+                .to_string();
+            let capture = CaptureState {
+                interface,
+                snort_pid: data
+                    .get("snort_pid")
+                    .or_else(|| data.get("pid"))
+                    .and_then(Value::as_u64)
+                    .map(|value| value as u32),
+                log_dir: data
+                    .get("log_dir")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                mode: if state.config.environment == "prod" {
+                    "helper".to_string()
+                } else {
+                    "dev-helper".to_string()
+                },
+                started_at: data
+                    .get("started_at")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(crate::store::unix_now),
+            };
+            query_store(state, |store| store.save_capture_state(&capture))?;
+            state.set_capture(Some(capture.clone()));
+            return Ok(serde_json::to_value(capture)?);
+        }
+        if state.capture().is_some() {
+            query_store(state, |store| store.clear_capture_state())?;
+            state.set_capture(None);
+        }
+    } else if let Some(capture) = state.capture() {
+        return Ok(serde_json::to_value(capture)?);
+    }
+
+    let interface = state
+        .config
+        .snort_interface
+        .clone()
+        .or_else(pigui_collector::default_interface)
+        .ok_or_else(|| Error::Config("no default capture interface found".into()))?;
+    capture_start(state, serde_json::json!({ "interface": interface })).await
 }
 
 async fn capture_stop(state: &AppState) -> Result<Value> {

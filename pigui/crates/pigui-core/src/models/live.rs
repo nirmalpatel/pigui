@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::domain::TrustState;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Process {
     pub pid: u32,
@@ -64,6 +66,7 @@ pub struct DnsObservation {
     pub rcode: Option<String>,
     pub answers: Option<String>,
     pub ttl: Option<String>,
+    pub trust_state: TrustState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

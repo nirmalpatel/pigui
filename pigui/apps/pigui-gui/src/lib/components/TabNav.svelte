@@ -3,21 +3,11 @@
 
   let {
     tab,
-    flows,
-    processes,
-    destinations,
-    needsReview,
-    dns,
-    alerts,
+    totals,
     onSelect,
   }: {
     tab: Tab;
-    flows: number;
-    processes: number;
-    destinations: number;
-    needsReview: number;
-    dns: number;
-    alerts: number;
+    totals: Partial<Record<Tab, number>>;
     onSelect: (tab: Tab) => void;
   } = $props();
 
@@ -38,18 +28,10 @@
   {#each tabs as item}
     <button class:active={tab === item.id} onclick={() => onSelect(item.id)}>
       {item.label}
-      {#if item.id === "connections" && flows}
-        <span class="count">{flows}</span>
-      {:else if item.id === "processes" && processes}
-        <span class="count">{processes}</span>
-      {:else if item.id === "destinations" && destinations}
-        <span class="count">{destinations}</span>
-      {:else if item.id === "domains" && needsReview > 0}
-        <span class="count review-count">{needsReview}</span>
-      {:else if item.id === "dns" && dns}
-        <span class="count">{dns}</span>
-      {:else if item.id === "alerts" && alerts}
-        <span class="count">{alerts}</span>
+      {#if totals[item.id] !== undefined}
+        <span class="count" title={`${totals[item.id]} rows in database`}>
+          {totals[item.id]}
+        </span>
       {/if}
     </button>
   {/each}

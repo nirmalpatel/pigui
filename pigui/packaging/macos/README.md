@@ -207,16 +207,14 @@ The packaged helper is a LaunchDaemon and must be registered with
 `SMAppService`. Apple requires the app to be code signed and, for LaunchDaemons,
 notarized. The recommended install location is `/Applications`.
 
-In PIGUI:
-
-1. Open the **Capture** tab.
-2. Click **Register helper**.
-3. Click **Open Login Items settings** and approve PIGUI.
-4. Click **Check again** until the helper shows `enabled`.
-5. Enter the capture interface, usually `en0`, and click **Enable capture**.
+Launch PIGUI from `/Applications`. It registers the daemon and helper
+automatically, selects the default-route interface, and starts capture. If macOS
+shows a Login Items approval prompt, approve PIGUI once; capture starts by itself
+after approval.
 
 PIGUI never asks for a password. macOS owns the approval dialog, and the helper
-never receives a credential.
+never receives a credential. Manual start/stop and diagnostics remain under
+**Capture → Advanced and diagnostics**.
 
 After installing, verify the installed copy:
 

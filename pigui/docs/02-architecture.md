@@ -154,8 +154,10 @@ Development must not write into the parent Snort source tree.
 Current implemented flow:
 
 1. The daemon probes Snort and reports capabilities.
-2. The GUI asks the daemon to start capture. The daemon calls the helper over
-   `pigui-helperctl`/XPC, and the helper starts Snort.
+2. On launch the app registers its services, asks the daemon to ensure capture
+   (`capture.ensure`), and retries after macOS approval. The daemon selects the
+   default interface and calls the helper over `pigui-helperctl`/XPC; the helper
+   starts Snort.
 3. `snort generate-config` copies the parent `lua/snort.lua` and
    `snort_defaults.lua`, appends PIGUI extractor/logging overrides, copies rule
    files, and validates the result with `snort -T`.

@@ -11,14 +11,25 @@
     type SortColumns,
     type SortState,
   } from "../sort";
-  import type { Connection, Flow } from "../types";
+  import type { Connection, Flow, ListQueryState } from "../types";
   import SortHeader from "./SortHeader.svelte";
 
-  let { flows, connections }: { flows: Flow[]; connections: Connection[] } =
-    $props();
+  let {
+    flows,
+    connections,
+    onQuery,
+  }: {
+    flows: Flow[];
+    connections: Connection[];
+    onQuery?: (query: ListQueryState) => void;
+  } = $props();
 
   let filter = $state("");
   let flowSort = $state<SortState | null>(null);
+
+  function emitQuery() {
+    onQuery?.({ q: filter.trim() || undefined });
+  }
   let connectionSort = $state<SortState | null>(null);
 
   const flowColumns: SortColumns<Flow> = {
@@ -79,7 +90,7 @@
 <section class="panel fill">
   <div class="panel-header">
     <h2>Live process connections</h2>
-    <input type="search" placeholder="Filter live process connections" bind:value={filter} />
+    <input type="search" placeholder="Filter connections" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>

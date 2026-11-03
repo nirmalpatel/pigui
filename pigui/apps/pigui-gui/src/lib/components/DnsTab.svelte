@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatTime, numericValue } from "../display";
+  import { formatTime, numericValue, trustOrder } from "../display";
   import { filterItems } from "../filter";
   import {
     sortBy,
@@ -42,6 +42,7 @@
     rcode: (observation) => observation.rcode,
     answers: (observation) => observation.answers,
     ttl: (observation) => numericValue(observation.ttl),
+    trust: (observation) => trustOrder[observation.trust_state],
   };
 
   const sortedDns = $derived(
@@ -75,6 +76,7 @@
           <SortHeader label="Rcode" column="rcode" sort={dnsSort} onToggle={toggleDnsSort} />
           <SortHeader label="Answers" column="answers" sort={dnsSort} onToggle={toggleDnsSort} />
           <SortHeader label="TTL" column="ttl" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="Trust" column="trust" sort={dnsSort} onToggle={toggleDnsSort} />
         </tr>
       </thead>
       <tbody>
@@ -85,12 +87,13 @@
             <td class="domain">{observation.query ?? "-"}</td>
             <td>{observation.qtype ?? "-"}</td>
             <td>{observation.rcode ?? "-"}</td>
-            <td class="mono">{observation.answers ?? "-"}</td>
+            <td class="mono answers">{observation.answers ?? "-"}</td>
             <td class="mono">{observation.ttl ?? "-"}</td>
+            <td><span class="tag {observation.trust_state}">{observation.trust_state}</span></td>
           </tr>
         {:else}
           <tr>
-            <td class="empty" colspan="7">
+            <td class="empty" colspan="8">
               No DNS queries yet. Snort telemetry must see DNS responses on port 53
               while capture is running; DoH/DoT traffic will not appear here.
             </td>

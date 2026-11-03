@@ -69,7 +69,7 @@ On startup the daemon:
 | Process collector | Settings `collector.poll_ms` (default 1000 ms, minimum 250 ms) | Runs `nettop`, enriches with `ps`, upserts processes and live flows |
 | Name resolver | Settings `resolver.loop_secs` (default 30 s) | Resolves PTR candidates and due watched domains |
 | Maintenance | Settings `maintenance.interval_secs` (default 300 s) | Prunes old rows using the configured retention limits |
-| Capture control | Event-driven RPC | Starts/stops Snort via the dev or packaged helper and records the active interface |
+| Capture control | Event-driven RPC | Starts/stops Snort via the dev or packaged helper, records the active interface, and supports idempotent `capture.ensure` for automatic startup |
 | RPC server | event-driven | Accepts newline-delimited JSON requests on the Unix socket |
 
 The collectors run on dedicated OS threads so the single-threaded async runtime

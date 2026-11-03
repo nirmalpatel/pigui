@@ -53,6 +53,8 @@
   let refreshing = $state(false);
   let lastUpdated = $state("");
   let startingDaemon = $state(false);
+  let autoCaptureError = $state<string | null>(null);
+  let lastAutoCaptureAttempt = 0;
 
   let alertsOffset = $state(0);
   let alertsLimit = $state(200);
@@ -78,7 +80,6 @@
 
   let alertsQuery = $state<ListQueryState>({});
   let destinationsQuery = $state<ListQueryState>({});
-  let flowsQuery = $state<ListQueryState>({});
   let processesQuery = $state<ListQueryState>({});
   let connectionsQuery = $state<ListQueryState>({});
   let domainsQuery = $state<ListQueryState>({});
@@ -91,20 +92,65 @@
     domains.filter((domain) => needsReview(domain)).length,
   );
 
+  const dbTotals = $derived<Partial<Record<Tab, number>>>({
+    connections: (status?.active_flows ?? 0) + (status?.connection_count ?? 0),
+    processes: status?.active_processes ?? 0,
+    destinations: status?.destination_count ?? 0,
+    domains: status?.domain_count ?? 0,
+    dns: status?.dns_count ?? 0,
+    alerts: status?.alert_count ?? 0,
+  });
+
   const activePage = $derived.by(() => {
     switch (tab) {
       case "alerts":
-        return { total: alertsTotal, offset: alertsOffset, loaded: alerts.length, limit: alertsLimit };
+        return {
+          total: alertsTotal,
+          offset: alertsOffset,
+          loaded: alerts.length,
+          dbTotal: dbTotals.alerts ?? 0,
+          filtering: Boolean(alertsQuery.q),
+        };
       case "destinations":
-        return { total: destinationsTotal, offset: destinationsOffset, loaded: destinations.length, limit: destinationsLimit };
+        return {
+          total: destinationsTotal,
+          offset: destinationsOffset,
+          loaded: destinations.length,
+          dbTotal: dbTotals.destinations ?? 0,
+          filtering: Boolean(destinationsQuery.q),
+        };
       case "connections":
-        return { total: flowsTotal + connectionsTotal, offset: 0, loaded: flows.length + connections.length, limit: flowsLimit + connectionsLimit };
+        return {
+          total: flowsTotal + connectionsTotal,
+          offset: flowsOffset,
+          loaded: flows.length + connections.length,
+          dbTotal: dbTotals.connections ?? 0,
+          filtering: Boolean(connectionsQuery.q),
+        };
       case "processes":
-        return { total: processesTotal, offset: processesOffset, loaded: processes.length, limit: processesLimit };
+        return {
+          total: processesTotal,
+          offset: processesOffset,
+          loaded: processes.length,
+          dbTotal: dbTotals.processes ?? 0,
+          filtering: Boolean(processesQuery.q),
+        };
       case "domains":
-        return { total: domainsTotal, offset: domainsOffset, loaded: domains.length, limit: domainsLimit };
+        return {
+          total: domainsTotal,
+          offset: domainsOffset,
+          loaded: domains.length,
+          dbTotal: dbTotals.domains ?? 0,
+          filtering: Boolean(domainsQuery.q || domainsQuery.trust),
+        };
       case "dns":
-        return { total: dnsTotal, offset: dnsOffset, loaded: dnsObservations.length, limit: dnsLimit };
+        return {
+          total: dnsTotal,
+          offset: dnsOffset,
+          loaded: dnsObservations.length,
+          dbTotal: dbTotals.dns ?? 0,
+          filtering: Boolean(dnsQuery.q),
+        };
       default:
         return null;
     }
@@ -158,7 +204,7 @@
         invoke<StatusPayload>("get_status"),
         invoke<AlertList>("list_alerts", { limit: alertsLimit, offset: alertsOffset, ...alertsQuery }),
         invoke<DestinationList>("list_destinations", { limit: destinationsLimit, offset: destinationsOffset, ...destinationsQuery }),
-        invoke<FlowList>("list_flows", { limit: flowsLimit, offset: flowsOffset, ...flowsQuery }),
+        invoke<FlowList>("list_flows", { limit: flowsLimit, offset: flowsOffset, ...connectionsQuery }),
         invoke<ProcessList>("list_processes", { limit: processesLimit, offset: processesOffset, ...processesQuery }),
         invoke<ConnectionList>("list_connections", { limit: connectionsLimit, offset: connectionsOffset, ...connectionsQuery }),
         invoke<DomainList>("list_domains", { limit: domainsLimit, offset: domainsOffset, ...domainsQuery }),
@@ -204,71 +250,43 @@
   }
 
   function changePage(delta: -1 | 1) {
-    const offsetFor = (offset: number, limit: number) =>
+    const offsetFor = (offset: number) =>
       Math.max(0, offset + delta * pageSize);
     switch (tab) {
       case "alerts":
-        alertsOffset = offsetFor(alertsOffset, alertsLimit);
+        alertsOffset = offsetFor(alertsOffset);
         alertsLimit = pageSize;
         break;
       case "destinations":
-        destinationsOffset = offsetFor(destinationsOffset, destinationsLimit);
+        destinationsOffset = offsetFor(destinationsOffset);
         destinationsLimit = pageSize;
         break;
       case "processes":
-        processesOffset = offsetFor(processesOffset, processesLimit);
+        processesOffset = offsetFor(processesOffset);
         processesLimit = pageSize;
         break;
       case "domains":
-        domainsOffset = offsetFor(domainsOffset, domainsLimit);
+        domainsOffset = offsetFor(domainsOffset);
         domainsLimit = pageSize;
         break;
       case "dns":
-        dnsOffset = offsetFor(dnsOffset, dnsLimit);
+        dnsOffset = offsetFor(dnsOffset);
         dnsLimit = pageSize;
         break;
-      case "connections":
-        if (delta === 1) {
-          flowsLimit += pageSize;
-          connectionsLimit += pageSize;
-        } else {
-          flowsOffset = 0;
-          connectionsOffset = 0;
-          flowsLimit = pageSize;
-          connectionsLimit = pageSize;
-        }
+      case "connections": {
+        const nextOffset = offsetFor(flowsOffset);
+        flowsOffset = nextOffset;
+        connectionsOffset = nextOffset;
+        flowsLimit = pageSize;
+        connectionsLimit = pageSize;
         break;
-    }
-    void refresh();
-  }
-
-  function loadMore() {
-    switch (tab) {
-      case "alerts":
-        alertsLimit += pageSize;
-        break;
-      case "destinations":
-        destinationsLimit += pageSize;
-        break;
-      case "processes":
-        processesLimit += pageSize;
-        break;
-      case "domains":
-        domainsLimit += pageSize;
-        break;
-      case "dns":
-        dnsLimit += pageSize;
-        break;
-      case "connections":
-        flowsLimit += pageSize;
-        connectionsLimit += pageSize;
-        break;
+      }
     }
     void refresh();
   }
 
   function applyQuery(
-    kind: "alerts" | "destinations" | "processes" | "domains" | "dns",
+    kind: "alerts" | "destinations" | "processes" | "domains" | "dns" | "connections",
     query: ListQueryState,
   ) {
     switch (kind) {
@@ -297,8 +315,34 @@
         dnsOffset = 0;
         dnsLimit = pageSize;
         break;
+      case "connections":
+        connectionsQuery = query;
+        flowsOffset = 0;
+        connectionsOffset = 0;
+        flowsLimit = pageSize;
+        connectionsLimit = pageSize;
+        break;
     }
     void refresh();
+  }
+
+  async function maybeAutoCapture() {
+    if (!status || status.environment !== "prod" || status.capture_running) {
+      autoCaptureError = null;
+      return;
+    }
+    const now = Date.now();
+    if (now - lastAutoCaptureAttempt < 10_000) {
+      return;
+    }
+    lastAutoCaptureAttempt = now;
+    try {
+      await invoke("ensure_capture");
+      autoCaptureError = null;
+      await refresh();
+    } catch (cause) {
+      autoCaptureError = String(cause);
+    }
   }
 
   function handleSettingsChanged(next: AppSettings) {
@@ -309,11 +353,14 @@
 
   onMount(() => {
     void loadSettings();
-    void refresh();
+    void refresh().then(() => maybeAutoCapture());
   });
 
   $effect(() => {
-    const interval = setInterval(() => void refresh(), refreshMs);
+    const interval = setInterval(
+      () => void refresh().then(() => maybeAutoCapture()),
+      refreshMs,
+    );
     return () => clearInterval(interval);
   });
 </script>
@@ -373,27 +420,22 @@
 
       <TabNav
         {tab}
-        flows={flowsTotal}
-        processes={processesTotal}
-        destinations={destinationsTotal}
-        needsReview={needsReviewCount}
-        dns={dnsTotal}
-        alerts={alertsTotal}
+        totals={dbTotals}
         onSelect={(next) => {
           tab = next;
         }}
       />
 
-      {#if activePage && activePage.total > 0}
+      {#if activePage}
         <PaginationBar
           total={activePage.total}
+          dbTotal={activePage.dbTotal}
           offset={activePage.offset}
           loaded={activePage.loaded}
-          pageSize={pageSize}
+          filtering={activePage.filtering}
           loading={refreshing}
           onPrev={() => changePage(-1)}
           onNext={() => changePage(1)}
-          onLoadMore={loadMore}
         />
       {/if}
 
@@ -409,7 +451,11 @@
           }}
         />
       {:else if tab === "connections"}
-        <ConnectionsTab {flows} {connections} />
+        <ConnectionsTab
+          {flows}
+          {connections}
+          onQuery={(query) => applyQuery("connections", query)}
+        />
       {:else if tab === "processes"}
         <ProcessesTab {processes} onQuery={(query) => applyQuery("processes", query)} />
       {:else if tab === "destinations"}
@@ -421,7 +467,7 @@
       {:else if tab === "alerts"}
         <AlertsTab {alerts} onQuery={(query) => applyQuery("alerts", query)} />
       {:else if tab === "capture"}
-        <CaptureTab {status} onRefresh={refresh} />
+        <CaptureTab {status} {autoCaptureError} onRefresh={refresh} />
       {:else if tab === "settings"}
         {#if settings}
           <SettingsTab {settings} onChanged={handleSettingsChanged} />

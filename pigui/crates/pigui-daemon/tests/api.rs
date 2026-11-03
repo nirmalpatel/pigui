@@ -127,6 +127,7 @@ async fn serves_status_alerts_and_destinations() {
     assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
     assert_eq!(status.alert_count, 5);
     assert_eq!(status.destination_count, 4);
+    assert_eq!(status.connection_count, 1);
     assert_eq!(status.tls_count, 1);
     assert_eq!(status.domain_count, 1);
     assert!(!status.extractor_file.is_empty());
