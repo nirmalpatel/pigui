@@ -13,7 +13,7 @@
   import ProcessesTab from "./lib/components/ProcessesTab.svelte";
   import SettingsTab from "./lib/components/SettingsTab.svelte";
   import TabNav from "./lib/components/TabNav.svelte";
-  import { needsReview } from "./lib/display";
+  import { degradedReasonLabel, needsReview } from "./lib/display";
   import type {
     AlertList,
     AlertRecord,
@@ -348,7 +348,7 @@
     {#if status}
       {#if status.collector_error}
         <section class="banner warning">
-          <strong>Collector error</strong>
+          <strong>Process collector error</strong>
           {status.collector_error}
         </section>
       {/if}
@@ -357,16 +357,17 @@
           <strong>Degraded capabilities</strong>
           <ul>
             {#each status.degraded as reason}
-              <li>{reason}</li>
+              <li>{degradedReasonLabel(reason)}</li>
             {/each}
           </ul>
         </section>
       {/if}
       {#if status.extractor_idle}
         <section class="banner warning">
-          <strong>Extractor is not producing telemetry.</strong>
-          Alerts are arriving but no DNS, TLS, HTTP, QUIC, or connection records have
-          been ingested. Stop Snort, regenerate the configuration, and restart live capture.
+          <strong>Snort telemetry is not arriving.</strong>
+          Snort alerts are arriving but no connection, DNS, TLS, HTTP, or QUIC
+          records have been ingested. Stop Snort, regenerate the configuration,
+          and restart capture.
         </section>
       {/if}
 

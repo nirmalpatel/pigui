@@ -1,8 +1,8 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use pigui_core::bundle;
 use pigui_core::error::{Error, Result};
 use pigui_core::rpc::{
     AlertList, CaptureStartRequest, CaptureState, CaptureStatusPayload, ConnectionList,
@@ -162,14 +162,9 @@ fn status(state: &AppState) -> Result<StatusPayload> {
     let capture = state.capture();
     let capture_interface = capture.as_ref().map(|capture| capture.interface.clone());
     let capture_mode = capture.as_ref().map(|capture| capture.mode.clone());
-    let config_path = state
-        .capabilities
-        .config_path
-        .as_deref()
-        .map(Path::new)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| state.config.snort_config_dir.join("snort.lua"));
+    let config_path = active_snort_config(&state.config);
     let snort_config_hash = pigui_snort::config_gen::file_hash(&config_path);
+    let snort_config_path = Some(config_path.display().to_string());
     let extractor_metadata = std::fs::metadata(&state.config.extractor_json).ok();
     let extractor_size = extractor_metadata
         .as_ref()
@@ -208,6 +203,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         capture_interface,
         capture_mode,
         snort_config_hash,
+        snort_config_path,
         active_flows,
         active_processes,
         extractor_ingested,
@@ -323,11 +319,7 @@ fn snort_status(state: &AppState) -> Result<SnortStatusPayload> {
         running: status.running,
         pid: status.pid,
         interface,
-        config_path: state
-            .capabilities
-            .config_path
-            .clone()
-            .or(status.config_path),
+        config_path: Some(active_snort_config(&state.config).display().to_string()),
         log_dir: status.log_dir,
         extractor_json: status.extractor_json,
         control_socket: status.control_socket,
@@ -483,6 +475,10 @@ fn list_quic(state: &AppState, params: Value) -> Result<Value> {
         observations,
         total,
     })?)
+}
+
+fn active_snort_config(config: &pigui_core::config::Config) -> std::path::PathBuf {
+    bundle::snort_config().unwrap_or_else(|| config.snort_config_dir.join("snort.lua"))
 }
 
 fn query_list(state: &AppState, params: Value) -> ListQuery {

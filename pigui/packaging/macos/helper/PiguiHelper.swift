@@ -105,6 +105,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
                 result = encode(ok: false, error: "unknown method: \(method)")
             }
         } catch {
+            debugLog("method \(method) failed: \(error)")
             result = encode(ok: false, error: "\(error)")
         }
 
@@ -249,6 +250,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         }
 
         persistCaptureState()
+        debugLog("capture started on \(interface) pid \(process.processIdentifier)")
         return ok(data: [
             "running": true,
             "pid": process.processIdentifier,
@@ -289,6 +291,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         captureLogDir = nil
         captureStartedAt = nil
         clearCaptureState()
+        debugLog("capture stopped")
         return ok(data: ["running": false])
     }
 
@@ -445,6 +448,13 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         )
     }
 
+    private func debugLog(_ message: String) {
+        guard isDevelopment else {
+            return
+        }
+        FileHandle.standardOutput.write(Data(("[dev-helper] " + message + "\n").utf8))
+    }
+
     private func processAlive(_ pid: pid_t) -> Bool {
         kill(pid, 0) == 0 || errno == EPERM
     }
@@ -500,6 +510,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         captureInterface = interface
         captureLogDir = logDir
         captureStartedAt = startedAt
+        debugLog("restored capture on \(interface) pid \(pidValue)")
     }
 
     private func prepareLogDirectory(for user: ConsoleUser, override: String?) throws -> URL {

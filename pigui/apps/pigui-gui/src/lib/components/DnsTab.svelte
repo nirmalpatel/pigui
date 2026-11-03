@@ -61,8 +61,8 @@
 
 <section class="panel fill">
   <div class="panel-header">
-    <h2>DNS observations</h2>
-    <input type="search" placeholder="Filter DNS" bind:value={filter} oninput={emitQuery} />
+    <h2>DNS queries <span class="hint">Snort telemetry</span></h2>
+    <input type="search" placeholder="Filter DNS queries" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>
@@ -91,7 +91,7 @@
         {:else}
           <tr>
             <td class="empty" colspan="7">
-              No DNS observations yet. DNS responses must be observed on port 53
+              No DNS queries yet. Snort telemetry must see DNS responses on port 53
               while capture is running; DoH/DoT traffic will not appear here.
             </td>
           </tr>

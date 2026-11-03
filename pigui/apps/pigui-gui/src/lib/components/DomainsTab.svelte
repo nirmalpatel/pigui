@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import {
+    evidenceLabels,
     flagLabel,
     formatTime,
     hostnamesFor,
@@ -170,11 +171,11 @@
 
 <section class="panel fill">
   <div class="panel-header">
-    <h2>Domains</h2>
+    <h2>Domains <span class="hint">all evidence</span></h2>
     <div class="panel-tools">
       <select bind:value={domainTrustFilter} aria-label="Trust filter">
         <option value="all">All domains</option>
-        <option value="needs_review">Needs review</option>
+        <option value="needs_review">Review</option>
         <option value="trusted">Trusted</option>
         <option value="unknown">Unknown</option>
         <option value="suspicious">Suspicious</option>
@@ -189,12 +190,12 @@
         <tr>
           <SortHeader label="Registrable domain" column="domain" sort={domainSort} onToggle={toggleDomainSort} />
           <SortHeader label="Hostnames" column="hostnames" sort={domainSort} onToggle={toggleDomainSort} />
-          <SortHeader label="Sources" column="sources" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Evidence" column="sources" sort={domainSort} onToggle={toggleDomainSort} />
           <SortHeader label="Trust" column="trust" sort={domainSort} onToggle={toggleDomainSort} />
-          <SortHeader label="Flags" column="flags" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Review" column="flags" sort={domainSort} onToggle={toggleDomainSort} />
           <SortHeader label="IPs" column="ips" sort={domainSort} onToggle={toggleDomainSort} />
           <SortHeader label="Processes" column="processes" sort={domainSort} onToggle={toggleDomainSort} />
-          <SortHeader label="Observed" column="observed" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Events" column="observed" sort={domainSort} onToggle={toggleDomainSort} />
           <SortHeader label="First seen" column="first_seen" sort={domainSort} onToggle={toggleDomainSort} />
           <SortHeader label="Last seen" column="last_seen" sort={domainSort} onToggle={toggleDomainSort} />
           <th>Mark</th>
@@ -229,7 +230,7 @@
                 -
               {/if}
             </td>
-            <td>{domain.sources.length ? domain.sources.join(", ") : "-"}</td>
+            <td>{domain.sources.length ? evidenceLabels(domain.sources).join(", ") : "-"}</td>
             <td><span class="tag {domain.trust_state}">{domain.trust_state}</span></td>
             <td>{domain.flags.length ? domain.flags.map(flagLabel).join(", ") : "-"}</td>
             <td>{domain.endpoint_count}</td>
@@ -257,8 +258,8 @@
         {:else}
           <tr>
             <td class="empty" colspan="11">
-              No domains observed yet. Check the DNS tab and extractor health;
-              DNS must be captured on port 53 while PIGUI is running.
+              No domains yet. Check DNS queries and Snort telemetry health;
+              DNS must be visible to Snort on port 53 while capture is running.
             </td>
           </tr>
         {/each}

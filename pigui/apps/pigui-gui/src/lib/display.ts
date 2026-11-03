@@ -78,14 +78,66 @@ export function hostnamesFor(domain: DomainSummary): string[] {
 export function flagLabel(flag: ReviewFlag): string {
   switch (flag) {
     case "new_domain":
-      return "new";
+      return "new domain";
     case "no_domain":
       return "no domain";
     case "invalid_tls":
       return "invalid TLS";
     case "alerts":
-      return "alerts";
+      return "has alerts";
     case "unknown_trust":
-      return "unknown";
+      return "no trust set";
+  }
+}
+
+export function evidenceLabel(source: string): string {
+  switch (source) {
+    case "dns":
+      return "DNS";
+    case "tls":
+      return "TLS SNI";
+    case "http":
+      return "HTTP Host";
+    case "quic":
+      return "QUIC SNI";
+    case "ptr":
+      return "PTR";
+    case "watched":
+      return "Watched";
+    case "legacy":
+      return "Legacy";
+    default:
+      return source;
+  }
+}
+
+export function evidenceLabels(sources: string[]): string[] {
+  return [...new Set(sources.map(evidenceLabel))];
+}
+
+export function degradedReasonLabel(reason: string): string {
+  if (reason.startsWith("extractor")) {
+    return "Snort telemetry is unavailable; connection, DNS, TLS, HTTP, and QUIC records will not be collected.";
+  }
+  if (reason.startsWith("alert_json")) {
+    return "Snort alerts are unavailable; alert ingestion is disabled.";
+  }
+  if (reason.startsWith("control socket unavailable")) {
+    return "Snort control API is unavailable; PIGUI is using file-based capture and is not affected.";
+  }
+  if (reason.startsWith("snort configuration validation failed")) {
+    return "Snort configuration validation failed.";
+  }
+  return reason;
+}
+
+export function captureModeLabel(mode?: string): string {
+  switch (mode) {
+    case "dev-helper":
+      return "dev helper";
+    case "helper":
+      return "packaged helper";
+    default:
+      return mode || "not running";
   }
 }

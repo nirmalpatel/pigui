@@ -115,6 +115,7 @@ through this API.
   "capture_interface": "en0",
   "capture_mode": "helper",
   "snort_config_hash": "0123456789abcdef",
+  "snort_config_path": "/path/to/var/snort/snort.lua",
   "active_flows": 18,
   "active_processes": 7,
   "extractor_ingested": 500,

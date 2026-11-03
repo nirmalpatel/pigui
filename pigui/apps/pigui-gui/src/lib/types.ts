@@ -120,6 +120,7 @@ export interface StatusPayload {
   capture_interface?: string;
   capture_mode?: string;
   snort_config_hash?: string;
+  snort_config_path?: string;
   active_flows: number;
   active_processes: number;
   extractor_ingested: number;

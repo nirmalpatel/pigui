@@ -78,8 +78,8 @@
 
 <section class="panel fill">
   <div class="panel-header">
-    <h2>Live connections</h2>
-    <input type="search" placeholder="Filter connections" bind:value={filter} />
+    <h2>Live process connections</h2>
+    <input type="search" placeholder="Filter live process connections" bind:value={filter} />
   </div>
   <div class="table-wrap tall">
     <table>
@@ -87,13 +87,13 @@
         <tr>
           <SortHeader label="Process" column="process" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
           <SortHeader label="PID" column="pid" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
-          <SortHeader label="Proto" column="proto" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
+          <SortHeader label="Protocol" column="proto" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
           <SortHeader label="Local" column="local" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
           <SortHeader label="Remote" column="remote" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
           <SortHeader label="State" column="state" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
           <SortHeader label="Interface" column="interface" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
-          <SortHeader label="Traffic out/in" column="traffic" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
-          <SortHeader label="Seen" column="seen" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
+          <SortHeader label="Sent / received" column="traffic" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
+          <SortHeader label="Last seen" column="seen" sort={flowSort} onToggle={(key) => (flowSort = toggleSort(flowSort, key))} />
         </tr>
       </thead>
       <tbody>
@@ -110,7 +110,7 @@
             <td class="mono">{formatTime(flow.last_seen)}</td>
           </tr>
         {:else}
-          <tr><td class="empty" colspan="9">No live connections captured yet.</td></tr>
+          <tr><td class="empty" colspan="9">No live process connections yet.</td></tr>
         {/each}
       </tbody>
     </table>
@@ -119,7 +119,7 @@
 
 <section class="panel fill">
   <div class="panel-header">
-    <h2>Completed connections from Snort</h2>
+    <h2>Completed Snort connections</h2>
   </div>
   <div class="table-wrap tall">
     <table>
@@ -128,11 +128,11 @@
           <SortHeader label="Time" column="time" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
           <SortHeader label="Process" column="process" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
           <SortHeader label="PID" column="pid" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
-          <SortHeader label="Proto" column="proto" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
+          <SortHeader label="Protocol" column="proto" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
           <SortHeader label="Remote" column="remote" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
           <SortHeader label="Service" column="service" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
           <SortHeader label="State" column="state" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
-          <SortHeader label="Traffic out/in" column="traffic" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
+          <SortHeader label="Sent / received" column="traffic" sort={connectionSort} onToggle={(key) => (connectionSort = toggleSort(connectionSort, key))} />
         </tr>
       </thead>
       <tbody>
@@ -148,7 +148,7 @@
             <td class="mono">{formatBytes(connection.bytes_ab)} / {formatBytes(connection.bytes_ba)}</td>
           </tr>
         {:else}
-          <tr><td class="empty" colspan="8">No completed extractor records yet.</td></tr>
+          <tr><td class="empty" colspan="8">No completed Snort connections yet.</td></tr>
         {/each}
       </tbody>
     </table>

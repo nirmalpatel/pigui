@@ -29,7 +29,10 @@ read_snort_pid() {
 
 rpc_call() {
   local method="$1"
-  local params="${2:-{}}"
+  local params="${2:-}"
+  if [ -z "$params" ]; then
+    params='{}'
+  fi
   python3 - "$PIGUI_SOCKET" "$method" "$params" <<'PY'
 import json
 import socket

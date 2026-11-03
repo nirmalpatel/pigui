@@ -63,8 +63,8 @@
 
 <section class="panel fill">
   <div class="panel-header">
-    <h2>Alerts</h2>
-    <input type="search" placeholder="Filter alerts" bind:value={filter} oninput={emitQuery} />
+    <h2>Snort alerts</h2>
+    <input type="search" placeholder="Filter Snort alerts" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>
@@ -93,7 +93,7 @@
             <td>{alert.msg ?? "-"}</td>
           </tr>
         {:else}
-          <tr><td class="empty" colspan="8">No alerts ingested yet.</td></tr>
+          <tr><td class="empty" colspan="8">No Snort alerts yet.</td></tr>
         {/each}
       </tbody>
     </table>

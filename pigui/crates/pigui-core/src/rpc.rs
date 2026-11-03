@@ -341,6 +341,8 @@ pub struct StatusPayload {
     #[serde(default)]
     pub snort_config_hash: Option<String>,
     #[serde(default)]
+    pub snort_config_path: Option<String>,
+    #[serde(default)]
     pub active_flows: u64,
     #[serde(default)]
     pub active_processes: u64,

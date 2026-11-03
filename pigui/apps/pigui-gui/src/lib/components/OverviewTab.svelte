@@ -38,10 +38,10 @@
 
 {#if !status.snort_running}
   <section class="banner warning">
-    <strong>Live capture is off.</strong>
+    <strong>Packet capture is stopped.</strong>
     <p>
-      The daemon is running, but Snort is not. Register and approve the
-      privileged helper, then start capture from the Capture tab.
+      The daemon is running, but the packet collector (Snort) is not. Start
+      capture from the Capture tab.
     </p>
     <div class="actions">
       <button type="button" onclick={onSetupCapture}>Set up live capture</button>
@@ -51,51 +51,51 @@
 
 <section class="capabilities">
   <article>
-    <span class="label">Snort</span>
+    <span class="label">Packet collector (Snort)</span>
     <span class="value" class:warn={!status.snort_running}>
-      {status.snort_running ? "capturing" : "offline"}
+      {status.snort_running ? "running" : "stopped"}
     </span>
-    <span class="hint">{status.capabilities.version ?? "not found"} · {status.snort_interface ?? "no interface"}</span>
+    <span class="hint">{status.capabilities.version ?? "not found"} · {status.capture_interface ?? status.snort_interface ?? "no interface"}</span>
   </article>
   <article>
-    <span class="label">Active flows</span>
+    <span class="label">Live process connections</span>
     <span class="value">{status.active_flows}</span>
-    <span class="hint">from nettop on {status.snort_interface ?? "all interfaces"}</span>
+    <span class="hint">from process collector (nettop) on {status.capture_interface ?? status.snort_interface ?? "all interfaces"}</span>
   </article>
   <article>
     <span class="label">Processes</span>
     <span class="value">{status.active_processes}</span>
-    <span class="hint">with active connections</span>
+    <span class="hint">with live connections</span>
   </article>
   <article>
-    <span class="label">Alerts</span>
+    <span class="label">Snort alerts</span>
     <span class="value">{status.alert_count}</span>
-    <span class="hint">{status.alerts_ingested} ingested · {status.parse_errors} parse errors</span>
+    <span class="hint">{status.alerts_ingested} this session · {status.parse_errors} parse errors</span>
   </article>
   <article>
-    <span class="label">Extractor rows</span>
+    <span class="label">Snort telemetry records</span>
     <span class="value">{status.extractor_ingested}</span>
-    <span class="hint">completed flows and hostnames</span>
+    <span class="hint">connections, DNS, TLS, HTTP, QUIC this session</span>
   </article>
   <article>
     <span class="label">Destinations</span>
     <span class="value">{status.destination_count}</span>
-    <span class="hint">known remote endpoints</span>
+    <span class="hint">remote IPs correlated from Snort and process data</span>
   </article>
   <article>
-    <span class="label">DNS records</span>
+    <span class="label">DNS queries</span>
     <span class="value">{status.dns_count}</span>
-    <span class="hint">{status.tls_count} TLS · {status.http_count} HTTP · {status.quic_count} QUIC</span>
+    <span class="hint">{status.tls_count} TLS · {status.http_count} HTTP · {status.quic_count} QUIC records</span>
   </article>
   <article>
     <span class="label">Domains</span>
     <span class="value">{status.domain_count}</span>
-    <span class="hint">registrable domains observed</span>
+    <span class="hint">registrable domains from all evidence</span>
   </article>
   <article>
-    <span class="label">Needs review</span>
+    <span class="label">Review</span>
     <span class="value" class:warn={needsReviewCount > 0}>{needsReviewCount}</span>
-    <span class="hint">unknown or flagged domains</span>
+    <span class="hint">domains needing attention</span>
   </article>
 </section>
 
@@ -106,7 +106,7 @@
     </div>
     <div class="table-wrap short">
       <table>
-        <thead><tr><th>Process</th><th>PID</th><th>Conns</th><th>nettop traffic</th></tr></thead>
+        <thead><tr><th>Process</th><th>PID</th><th>Live conns</th><th>Process traffic</th></tr></thead>
         <tbody>
           {#each topProcesses as process (process.pid)}
             <tr>
@@ -129,7 +129,7 @@
     </div>
     <div class="table-wrap short">
       <table>
-        <thead><tr><th>Destination</th><th>Procs</th><th>Snort / live traffic</th></tr></thead>
+        <thead><tr><th>Destination</th><th>Processes</th><th>Snort / process traffic</th></tr></thead>
         <tbody>
           {#each topDestinations as destination (destination.ip)}
             <tr>
@@ -151,7 +151,7 @@
 
 <section class="panel fill">
   <div class="panel-header">
-    <h2>Recent alerts</h2>
+    <h2>Recent Snort alerts</h2>
   </div>
   <div class="table-wrap tall">
     <table>
@@ -167,7 +167,7 @@
             <td>{alert.msg ?? "-"}</td>
           </tr>
         {:else}
-          <tr><td class="empty" colspan="6">No alerts yet.</td></tr>
+          <tr><td class="empty" colspan="6">No Snort alerts yet.</td></tr>
         {/each}
       </tbody>
     </table>

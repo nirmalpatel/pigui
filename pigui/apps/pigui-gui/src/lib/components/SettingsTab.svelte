@@ -164,7 +164,11 @@
         <input type="number" min="1" max={draft.limits.max_page_size} bind:value={draft.ui.page_size} />
       </label>
       <label>
-        <span>Detail alert limit</span>
+        <span>Maximum page size</span>
+        <input type="number" min="50" max="10000" bind:value={draft.limits.max_page_size} />
+      </label>
+      <label>
+        <span>Destination detail alert limit</span>
         <input type="number" min="0" max="100" bind:value={draft.ui.detail_alert_limit} />
       </label>
       <label>
@@ -174,35 +178,35 @@
     </fieldset>
 
     <fieldset>
-      <legend>Collection</legend>
+      <legend>Process collector</legend>
       <label>
-        <span>nettop poll (ms)</span>
+        <span>Poll interval (ms)</span>
         <input type="number" min="250" max="60000" step="50" bind:value={draft.collector.poll_ms} />
       </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Maintenance</legend>
       <label>
-        <span>Maximum page size</span>
-        <input type="number" min="50" max="10000" bind:value={draft.limits.max_page_size} />
-      </label>
-      <label>
-        <span>Maintenance interval (seconds)</span>
+        <span>Interval (seconds)</span>
         <input type="number" min="30" max="86400" bind:value={draft.maintenance.interval_secs} />
       </label>
     </fieldset>
 
     <fieldset>
       <legend>Retention (days unless noted)</legend>
-      <label><span>Alerts</span><input type="number" min="1" max="3650" bind:value={draft.retention.alerts_days} /></label>
-      <label><span>Completed connections</span><input type="number" min="1" max="3650" bind:value={draft.retention.connections_days} /></label>
-      <label><span>DNS/TLS/HTTP/QUIC</span><input type="number" min="1" max="3650" bind:value={draft.retention.observations_days} /></label>
-      <label><span>Domains / mappings</span><input type="number" min="1" max="3650" bind:value={draft.retention.domains_days} /></label>
-      <label><span>Endpoints</span><input type="number" min="1" max="3650" bind:value={draft.retention.endpoints_days} /></label>
-      <label><span>PTR observations</span><input type="number" min="1" max="3650" bind:value={draft.retention.ptr_days} /></label>
-      <label><span>Live flows (seconds)</span><input type="number" min="60" max="86400" bind:value={draft.retention.flows_secs} /></label>
-      <label><span>Process rows (seconds)</span><input type="number" min="300" max="604800" bind:value={draft.retention.processes_secs} /></label>
+      <label><span>Snort alerts</span><input type="number" min="1" max="3650" bind:value={draft.retention.alerts_days} /></label>
+      <label><span>Completed Snort connections</span><input type="number" min="1" max="3650" bind:value={draft.retention.connections_days} /></label>
+      <label><span>Snort telemetry</span><input type="number" min="1" max="3650" bind:value={draft.retention.observations_days} /></label>
+      <label><span>Domains / evidence</span><input type="number" min="1" max="3650" bind:value={draft.retention.domains_days} /></label>
+      <label><span>Destinations</span><input type="number" min="1" max="3650" bind:value={draft.retention.endpoints_days} /></label>
+      <label><span>PTR records</span><input type="number" min="1" max="3650" bind:value={draft.retention.ptr_days} /></label>
+      <label><span>Live process connections (seconds)</span><input type="number" min="60" max="86400" bind:value={draft.retention.flows_secs} /></label>
+      <label><span>Process records (seconds)</span><input type="number" min="300" max="604800" bind:value={draft.retention.processes_secs} /></label>
     </fieldset>
 
     <fieldset>
-      <legend>Resolver</legend>
+      <legend>Name resolver (PTR / watched)</legend>
       <label><span>Loop interval (seconds)</span><input type="number" min="5" max="3600" bind:value={draft.resolver.loop_secs} /></label>
       <label><span>PTR batch</span><input type="number" min="1" max="100" bind:value={draft.resolver.ptr_batch} /></label>
       <label><span>PTR success cache (seconds)</span><input type="number" min="60" max="2592000" bind:value={draft.resolver.ptr_ok_ttl_secs} /></label>
