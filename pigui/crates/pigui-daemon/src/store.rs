@@ -11,15 +11,26 @@ use pigui_core::models::{
     WatchedDomain,
 };
 use pigui_core::rpc::{
-    AlertRecord, DestinationDetail, DestinationProcess, ProcessDestination, ProcessDetail,
+    AlertRecord, DestinationDetail, DestinationProcess, ListQuery, ProcessDestination,
+    ProcessDetail, PruneResult, SortDirection, TableCount,
 };
-use rusqlite::{Connection as SqlConnection, OptionalExtension, params};
+use pigui_core::settings::{AppSettings, ThemeMode};
+use rusqlite::{
+    Connection as SqlConnection, OpenFlags, OptionalExtension, params, params_from_iter,
+    types::Value as SqlValue,
+};
 use serde::Serialize;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
@@ -69,6 +80,8 @@ CREATE TABLE IF NOT EXISTS endpoints (
     reputation INTEGER NOT NULL DEFAULT 0,
     blocked INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_endpoints_last_seen ON endpoints (last_seen DESC);
 
 CREATE TABLE IF NOT EXISTS processes (
     pid INTEGER PRIMARY KEY,
@@ -245,6 +258,8 @@ CREATE TABLE IF NOT EXISTS ptr_observations (
     expires_at INTEGER NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_ptr_expires_at ON ptr_observations (expires_at);
+
 CREATE TABLE IF NOT EXISTS watched_domains (
     domain TEXT PRIMARY KEY,
     registrable_domain TEXT NOT NULL,
@@ -253,7 +268,6 @@ CREATE TABLE IF NOT EXISTS watched_domains (
     last_error TEXT
 );
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '4');
 "#;
 
 const INSERT_ALERT: &str = r#"
@@ -378,7 +392,14 @@ const SELECT_DESTINATION: &str = r#"
 SELECT
     e.ip, e.hostname, e.first_seen, e.last_seen, e.bytes_in, e.bytes_out,
     e.connection_count,
-    (SELECT COUNT(DISTINCT f.pid) FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL),
+    (SELECT COUNT(*) FROM (
+        SELECT f.pid FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL
+        UNION
+        SELECT c.pid FROM connections c WHERE c.server_ip = e.ip AND c.pid IS NOT NULL
+    )),
+    (SELECT COALESCE(SUM(f.bytes_ba), 0) FROM flows f WHERE f.server_ip = e.ip),
+    (SELECT COALESCE(SUM(f.bytes_ab), 0) FROM flows f WHERE f.server_ip = e.ip),
+    (SELECT COUNT(*) FROM flows f WHERE f.server_ip = e.ip),
     e.alert_count, e.reputation, e.blocked
 FROM endpoints e
 ORDER BY e.alert_count DESC, e.last_seen DESC, e.ip ASC
@@ -389,7 +410,14 @@ const SELECT_DESTINATION_BY_IP: &str = r#"
 SELECT
     e.ip, e.hostname, e.first_seen, e.last_seen, e.bytes_in, e.bytes_out,
     e.connection_count,
-    (SELECT COUNT(DISTINCT f.pid) FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL),
+    (SELECT COUNT(*) FROM (
+        SELECT f.pid FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL
+        UNION
+        SELECT c.pid FROM connections c WHERE c.server_ip = e.ip AND c.pid IS NOT NULL
+    )),
+    (SELECT COALESCE(SUM(f.bytes_ba), 0) FROM flows f WHERE f.server_ip = e.ip),
+    (SELECT COALESCE(SUM(f.bytes_ab), 0) FROM flows f WHERE f.server_ip = e.ip),
+    (SELECT COUNT(*) FROM flows f WHERE f.server_ip = e.ip),
     e.alert_count, e.reputation, e.blocked
 FROM endpoints e
 WHERE e.ip = ?1
@@ -441,6 +469,128 @@ ORDER BY ts DESC, id DESC
 LIMIT ?1 OFFSET ?2
 "#;
 
+const SELECT_ALERT_BASE: &str = r#"
+SELECT
+    id, event_ts, ts_text, gid, sid, rev, priority, class, msg, proto,
+    src_ip, src_port, dst_ip, dst_port, action, app_id, service, rule,
+    direction, pkt_num, ingested_at
+FROM alerts
+"#;
+
+const SELECT_FLOW_BASE: &str = r#"
+SELECT
+    id, proto, client_ip, client_port, server_ip, server_port, pid, process_name,
+    interface, state, bytes_ab, bytes_ba, packets_ab, packets_ba, first_seen, last_seen
+FROM flows
+"#;
+
+const SELECT_PROCESS_BASE: &str = r#"
+SELECT
+    pid, name, path, user, first_seen, last_seen, bytes_in, bytes_out, connection_count
+FROM processes
+"#;
+
+const SELECT_CONNECTION_BASE: &str = r#"
+SELECT
+    id, uid, ts, proto, client_ip, client_port, server_ip, server_port, service,
+    conn_state, duration, packets_ab, packets_ba, bytes_ab, bytes_ba, pid, process_name
+FROM connections
+"#;
+
+const DEST_PROCESS_COUNT_SQL: &str = "(SELECT COUNT(*) FROM (SELECT f.pid FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL UNION SELECT c.pid FROM connections c WHERE c.server_ip = e.ip AND c.pid IS NOT NULL))";
+
+const SELECT_DESTINATION_BASE: &str = r#"
+SELECT
+    e.ip, e.hostname, e.first_seen, e.last_seen, e.bytes_in, e.bytes_out,
+    e.connection_count,
+    (SELECT COUNT(*) FROM (
+        SELECT f.pid FROM flows f WHERE f.server_ip = e.ip AND f.pid IS NOT NULL
+        UNION
+        SELECT c.pid FROM connections c WHERE c.server_ip = e.ip AND c.pid IS NOT NULL
+    )),
+    (SELECT COALESCE(SUM(f.bytes_ba), 0) FROM flows f WHERE f.server_ip = e.ip),
+    (SELECT COALESCE(SUM(f.bytes_ab), 0) FROM flows f WHERE f.server_ip = e.ip),
+    (SELECT COUNT(*) FROM flows f WHERE f.server_ip = e.ip),
+    e.alert_count, e.reputation, e.blocked
+FROM endpoints e
+"#;
+
+const SELECT_DOMAIN_BASE: &str = r#"
+SELECT d.registrable_domain,
+                        COALESCE(t.state, 'unknown'),
+                        MIN(d.first_seen),
+                        MAX(d.last_seen),
+                        SUM(d.observation_count),
+                        GROUP_CONCAT(d.domain, char(31)),
+                        (SELECT GROUP_CONCAT(source, char(31))
+                         FROM (
+                             SELECT DISTINCT ed.source AS source
+                             FROM endpoint_domains ed
+                             JOIN domains dd ON dd.domain = ed.domain
+                             WHERE dd.registrable_domain = d.registrable_domain
+                         )),
+                        (SELECT COUNT(DISTINCT ed.ip)
+                         FROM endpoint_domains ed
+                         JOIN domains dd ON dd.domain = ed.domain
+                         WHERE dd.registrable_domain = d.registrable_domain),
+                        (SELECT COUNT(*) FROM (
+                            SELECT f.pid
+                            FROM flows f
+                            JOIN endpoint_domains ed ON ed.ip = f.server_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                              AND f.pid IS NOT NULL
+                            UNION
+                            SELECT c.pid
+                            FROM connections c
+                            JOIN endpoint_domains ed ON ed.ip = c.server_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                              AND c.pid IS NOT NULL
+                        )),
+                        (SELECT EXISTS(
+                            SELECT 1
+                            FROM alerts a
+                            JOIN endpoint_domains ed ON ed.ip = a.dst_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                        )),
+                        (SELECT EXISTS(
+                            SELECT 1
+                            FROM tls_observations t
+                            JOIN endpoint_domains ed ON ed.ip = t.server_ip
+                            JOIN domains dd ON dd.domain = ed.domain
+                            WHERE dd.registrable_domain = d.registrable_domain
+                              AND lower(COALESCE(t.validation_status, '')) IN
+                                  ('invalid', 'self_signed', 'self signed', 'untrusted')
+                        ))
+                 FROM domains d
+                 LEFT JOIN domain_trust t ON t.registrable_domain = d.registrable_domain
+                 /*FILTER*/ GROUP BY d.registrable_domain
+"#;
+
+const SELECT_DNS_BASE: &str = r#"
+SELECT id, ts, client_ip, query, qtype, rcode, answers, ttl
+FROM dns_observations
+"#;
+
+const SELECT_TLS_BASE: &str = r#"
+SELECT id, ts, client_ip, server_ip, server_port, server_name, version,
+       validation_status, subject, issuer
+FROM tls_observations
+"#;
+
+const SELECT_HTTP_BASE: &str = r#"
+SELECT id, ts, client_ip, server_ip, server_port, method, host, uri,
+       user_agent, status_code
+FROM http_observations
+"#;
+
+const SELECT_QUIC_BASE: &str = r#"
+SELECT id, ts, client_ip, server_ip, server_port, server_name, client_protocol
+FROM quic_observations
+"#;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct IngestStats {
     pub inserted: u64,
@@ -465,7 +615,9 @@ impl Store {
             std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
         let conn = SqlConnection::open(path).map_err(db)?;
-        Self::init(conn, true)
+        let store = Self::init(conn, true)?;
+        let _ = store.import_legacy_gui_settings(path);
+        Ok(store)
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -484,9 +636,13 @@ impl Store {
         let previous_version = read_schema_version(&conn)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         ensure_endpoints_hostname(&conn)?;
-        if !matches!(previous_version.as_deref(), Some("3" | "4")) {
+        if !matches!(previous_version.as_deref(), Some("5")) {
+            migrate_v5(&conn)?;
+        }
+        if !matches!(previous_version.as_deref(), Some("3" | "4" | "5")) {
             backfill_domains(&conn)?;
         }
+        set_schema_version(&conn, "5")?;
         Ok(Self { conn })
     }
 
@@ -585,14 +741,6 @@ impl Store {
             )
             .map_err(db)?;
         }
-
-        tx.execute("DELETE FROM flows WHERE last_seen < ?1", params![now - 600])
-            .map_err(db)?;
-        tx.execute(
-            "DELETE FROM processes WHERE last_seen < ?1",
-            params![now - 86_400],
-        )
-        .map_err(db)?;
 
         tx.commit().map_err(db)?;
         Ok(())
@@ -983,8 +1131,15 @@ impl Store {
         status: &str,
         error: Option<&str>,
         now: i64,
+        ok_ttl_secs: i64,
+        fail_ttl_secs: i64,
     ) -> Result<()> {
-        let expires_at = now + if status == "ok" { 86_400 } else { 21_600 };
+        let expires_at = now
+            + if status == "ok" {
+                ok_ttl_secs
+            } else {
+                fail_ttl_secs
+            };
         self.conn
             .execute(
                 "INSERT INTO ptr_observations (
@@ -1099,12 +1254,19 @@ impl Store {
         let mut statement = self
             .conn
             .prepare(
-                "SELECT pid, process_name, SUM(bytes_ba), SUM(bytes_ab), COUNT(*), MAX(last_seen)
+                "SELECT pid, process_name,
+                        SUM(CASE WHEN source = 'snort' THEN bytes_ba ELSE 0 END),
+                        SUM(CASE WHEN source = 'snort' THEN bytes_ab ELSE 0 END),
+                        SUM(CASE WHEN source = 'live' THEN bytes_ba ELSE 0 END),
+                        SUM(CASE WHEN source = 'live' THEN bytes_ab ELSE 0 END),
+                        SUM(CASE WHEN source = 'snort' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN source = 'live' THEN 1 ELSE 0 END),
+                        COUNT(*), MAX(last_seen)
                  FROM (
-                     SELECT pid, process_name, bytes_ab, bytes_ba, last_seen
+                     SELECT pid, process_name, bytes_ab, bytes_ba, last_seen, 'live' AS source
                      FROM flows WHERE server_ip = ?1
                      UNION ALL
-                     SELECT pid, process_name, bytes_ab, bytes_ba, ts AS last_seen
+                     SELECT pid, process_name, bytes_ab, bytes_ba, ts AS last_seen, 'snort' AS source
                      FROM connections WHERE server_ip = ?1
                  )
                  GROUP BY pid, process_name
@@ -1116,10 +1278,14 @@ impl Store {
                 Ok(DestinationProcess {
                     pid: row.get::<_, Option<i64>>(0)?.map(|value| value as u32),
                     process_name: row.get(1)?,
-                    bytes_in: row.get::<_, i64>(2)? as u64,
-                    bytes_out: row.get::<_, i64>(3)? as u64,
-                    connection_count: row.get::<_, i64>(4)? as u64,
-                    last_seen: row.get(5)?,
+                    snort_bytes_in: row.get::<_, i64>(2)? as u64,
+                    snort_bytes_out: row.get::<_, i64>(3)? as u64,
+                    live_bytes_in: row.get::<_, i64>(4)? as u64,
+                    live_bytes_out: row.get::<_, i64>(5)? as u64,
+                    snort_connection_count: row.get::<_, i64>(6)? as u64,
+                    live_connection_count: row.get::<_, i64>(7)? as u64,
+                    connection_count: row.get::<_, i64>(8)? as u64,
+                    last_seen: row.get(9)?,
                 })
             })
             .map_err(db)?;
@@ -1138,12 +1304,19 @@ impl Store {
         let mut statement = self
             .conn
             .prepare(
-                "SELECT server_ip, SUM(bytes_ba), SUM(bytes_ab), COUNT(*), MAX(last_seen)
+                "SELECT server_ip,
+                        SUM(CASE WHEN source = 'snort' THEN bytes_ba ELSE 0 END),
+                        SUM(CASE WHEN source = 'snort' THEN bytes_ab ELSE 0 END),
+                        SUM(CASE WHEN source = 'live' THEN bytes_ba ELSE 0 END),
+                        SUM(CASE WHEN source = 'live' THEN bytes_ab ELSE 0 END),
+                        SUM(CASE WHEN source = 'snort' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN source = 'live' THEN 1 ELSE 0 END),
+                        COUNT(*), MAX(last_seen)
                  FROM (
-                     SELECT server_ip, bytes_ab, bytes_ba, last_seen
+                     SELECT server_ip, bytes_ab, bytes_ba, last_seen, 'live' AS source
                      FROM flows WHERE pid = ?1
                      UNION ALL
-                     SELECT server_ip, bytes_ab, bytes_ba, ts AS last_seen
+                     SELECT server_ip, bytes_ab, bytes_ba, ts AS last_seen, 'snort' AS source
                      FROM connections WHERE pid = ?1
                  )
                  WHERE server_ip IS NOT NULL
@@ -1158,7 +1331,11 @@ impl Store {
                     row.get::<_, i64>(1)? as u64,
                     row.get::<_, i64>(2)? as u64,
                     row.get::<_, i64>(3)? as u64,
-                    row.get(4)?,
+                    row.get::<_, i64>(4)? as u64,
+                    row.get::<_, i64>(5)? as u64,
+                    row.get::<_, i64>(6)? as u64,
+                    row.get::<_, i64>(7)? as u64,
+                    row.get::<_, i64>(8)?,
                 ))
             })
             .map_err(db)?;
@@ -1169,7 +1346,18 @@ impl Store {
 
         let now = unix_now();
         let mut destinations = Vec::with_capacity(entries.len());
-        for (ip, bytes_in, bytes_out, connection_count, last_seen) in entries {
+        for (
+            ip,
+            snort_bytes_in,
+            snort_bytes_out,
+            live_bytes_in,
+            live_bytes_out,
+            snort_connection_count,
+            live_connection_count,
+            connection_count,
+            last_seen,
+        ) in entries
+        {
             let domains = self.endpoint_domains(&ip)?;
             let invalid_tls = self.has_invalid_tls(&ip)?;
             destinations.push(ProcessDestination {
@@ -1177,8 +1365,12 @@ impl Store {
                 flags: review_flags(&domains, 0, invalid_tls, now),
                 domains,
                 ip,
-                bytes_in,
-                bytes_out,
+                snort_bytes_in,
+                snort_bytes_out,
+                live_bytes_in,
+                live_bytes_out,
+                snort_connection_count,
+                live_connection_count,
                 connection_count,
                 last_seen,
             });
@@ -1394,10 +1586,831 @@ impl Store {
         self.count("SELECT COUNT(*) FROM quic_observations")
     }
 
+    pub fn list_alerts_query(&self, q: &ListQuery) -> Result<Vec<AlertRecord>> {
+        let (filter, params) = search_filter(
+            &[
+                "msg",
+                "CAST(sid AS TEXT)",
+                "src_ip",
+                "dst_ip",
+                "action",
+                "proto",
+                "class",
+            ],
+            q,
+            3,
+        );
+        let order = order_clause(
+            q,
+            &[
+                ("time", "event_ts"),
+                ("sid", "sid"),
+                ("priority", "priority"),
+                ("proto", "proto"),
+                ("source", "src_ip"),
+                ("destination", "dst_ip"),
+                ("action", "action"),
+                ("message", "msg"),
+            ],
+            "event_ts DESC, id DESC",
+        );
+        self.list_query_rows(
+            SELECT_ALERT_BASE,
+            &filter,
+            &order,
+            params,
+            q,
+            alert_record_from_row,
+        )
+    }
+
+    pub fn count_alerts_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(
+            &[
+                "msg",
+                "CAST(sid AS TEXT)",
+                "src_ip",
+                "dst_ip",
+                "action",
+                "proto",
+                "class",
+            ],
+            q,
+            1,
+        );
+        self.count_query_rows(SELECT_ALERT_BASE, &filter, params)
+    }
+
+    pub fn list_destinations_query(&self, q: &ListQuery) -> Result<Vec<Destination>> {
+        let (filter, params) = search_filter(&["e.ip", "e.hostname"], q, 3);
+        let order = order_clause(
+            q,
+            &[
+                ("ip", "e.ip"),
+                ("domains", "COALESCE(e.hostname, '')"),
+                ("trust", "COALESCE(e.hostname, '')"),
+                ("flags", "e.alert_count"),
+                ("processes", DEST_PROCESS_COUNT_SQL),
+                ("connections", "e.connection_count"),
+                ("alerts", "e.alert_count"),
+                ("bytes_in", "e.bytes_in"),
+                ("bytes_out", "e.bytes_out"),
+                ("first_seen", "e.first_seen"),
+                ("last_seen", "e.last_seen"),
+            ],
+            "e.alert_count DESC, e.last_seen DESC, e.ip ASC",
+        );
+        let mut destinations = self.list_query_rows(
+            SELECT_DESTINATION_BASE,
+            &filter,
+            &order,
+            params,
+            q,
+            destination_from_row,
+        )?;
+        for destination in &mut destinations {
+            self.hydrate_destination(destination, true)?;
+        }
+        Ok(destinations)
+    }
+
+    pub fn count_destinations_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(&["e.ip", "e.hostname"], q, 1);
+        self.count_query_rows(SELECT_DESTINATION_BASE, &filter, params)
+    }
+
+    pub fn list_flows_query(&self, q: &ListQuery) -> Result<Vec<Flow>> {
+        let (filter, params) = search_filter(
+            &[
+                "process_name",
+                "proto",
+                "state",
+                "client_ip",
+                "server_ip",
+                "interface",
+                "CAST(server_port AS TEXT)",
+            ],
+            q,
+            3,
+        );
+        let order = order_clause(
+            q,
+            &[
+                ("process", "process_name"),
+                ("pid", "pid"),
+                ("proto", "proto"),
+                ("local", "client_ip"),
+                ("remote", "server_ip"),
+                ("state", "state"),
+                ("interface", "interface"),
+                ("traffic", "bytes_ab + bytes_ba"),
+                ("seen", "last_seen"),
+            ],
+            "last_seen DESC, id DESC",
+        );
+        self.list_query_rows(SELECT_FLOW_BASE, &filter, &order, params, q, |row| {
+            Ok(Flow {
+                id: row.get(0)?,
+                proto: row.get(1)?,
+                client_ip: row.get(2)?,
+                client_port: row.get(3)?,
+                server_ip: row.get(4)?,
+                server_port: row.get(5)?,
+                pid: row.get::<_, Option<i64>>(6)?.map(|value| value as u32),
+                process_name: row.get(7)?,
+                interface: row.get(8)?,
+                state: row.get(9)?,
+                bytes_ab: row.get::<_, i64>(10)? as u64,
+                bytes_ba: row.get::<_, i64>(11)? as u64,
+                packets_ab: row.get::<_, i64>(12)? as u64,
+                packets_ba: row.get::<_, i64>(13)? as u64,
+                first_seen: row.get(14)?,
+                last_seen: row.get(15)?,
+            })
+        })
+    }
+
+    pub fn count_flows_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(
+            &[
+                "process_name",
+                "proto",
+                "state",
+                "client_ip",
+                "server_ip",
+                "interface",
+                "CAST(server_port AS TEXT)",
+            ],
+            q,
+            1,
+        );
+        self.count_query_rows(SELECT_FLOW_BASE, &filter, params)
+    }
+
+    pub fn list_processes_query(&self, q: &ListQuery) -> Result<Vec<Process>> {
+        let (filter, params) = search_filter(&["name", "path", "user", "CAST(pid AS TEXT)"], q, 3);
+        let order = order_clause(
+            q,
+            &[
+                ("process", "name"),
+                ("pid", "pid"),
+                ("user", "user"),
+                ("connections", "connection_count"),
+                ("bytes_in", "bytes_in"),
+                ("bytes_out", "bytes_out"),
+                ("path", "path"),
+                ("last_seen", "last_seen"),
+            ],
+            "last_seen DESC, bytes_in + bytes_out DESC",
+        );
+        self.list_query_rows(
+            SELECT_PROCESS_BASE,
+            &filter,
+            &order,
+            params,
+            q,
+            process_from_row,
+        )
+    }
+
+    pub fn count_processes_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(&["name", "path", "user", "CAST(pid AS TEXT)"], q, 1);
+        self.count_query_rows(SELECT_PROCESS_BASE, &filter, params)
+    }
+
+    pub fn list_connections_query(&self, q: &ListQuery) -> Result<Vec<Connection>> {
+        let (filter, params) = search_filter(
+            &[
+                "process_name",
+                "proto",
+                "server_ip",
+                "service",
+                "conn_state",
+                "CAST(server_port AS TEXT)",
+            ],
+            q,
+            3,
+        );
+        let order = order_clause(
+            q,
+            &[
+                ("time", "ts"),
+                ("process", "process_name"),
+                ("pid", "pid"),
+                ("proto", "proto"),
+                ("remote", "server_ip"),
+                ("service", "service"),
+                ("state", "conn_state"),
+                ("traffic", "bytes_ab + bytes_ba"),
+            ],
+            "ts DESC, id DESC",
+        );
+        self.list_query_rows(SELECT_CONNECTION_BASE, &filter, &order, params, q, |row| {
+            Ok(Connection {
+                id: row.get(0)?,
+                uid: row.get(1)?,
+                ts: row.get(2)?,
+                proto: row.get(3)?,
+                client_ip: row.get(4)?,
+                client_port: row.get::<_, Option<i64>>(5)?.map(|value| value as u16),
+                server_ip: row.get(6)?,
+                server_port: row.get::<_, Option<i64>>(7)?.map(|value| value as u16),
+                service: row.get(8)?,
+                conn_state: row.get(9)?,
+                duration: row.get(10)?,
+                packets_ab: row.get::<_, i64>(11)? as u64,
+                packets_ba: row.get::<_, i64>(12)? as u64,
+                bytes_ab: row.get::<_, i64>(13)? as u64,
+                bytes_ba: row.get::<_, i64>(14)? as u64,
+                pid: row.get::<_, Option<i64>>(15)?.map(|value| value as u32),
+                process_name: row.get(16)?,
+            })
+        })
+    }
+
+    pub fn count_connections_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(
+            &[
+                "process_name",
+                "proto",
+                "server_ip",
+                "service",
+                "conn_state",
+                "CAST(server_port AS TEXT)",
+            ],
+            q,
+            1,
+        );
+        self.count_query_rows(SELECT_CONNECTION_BASE, &filter, params)
+    }
+
+    pub fn list_dns_query(&self, q: &ListQuery) -> Result<Vec<DnsObservation>> {
+        let (filter, params) =
+            search_filter(&["query", "answers", "qtype", "rcode", "client_ip"], q, 3);
+        let order = order_clause(
+            q,
+            &[
+                ("time", "ts"),
+                ("client", "client_ip"),
+                ("query", "query"),
+                ("type", "qtype"),
+                ("rcode", "rcode"),
+                ("answers", "answers"),
+                ("ttl", "CAST(ttl AS INTEGER)"),
+            ],
+            "ts DESC, id DESC",
+        );
+        self.list_query_rows(SELECT_DNS_BASE, &filter, &order, params, q, |row| {
+            Ok(DnsObservation {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                client_ip: row.get(2)?,
+                query: row.get(3)?,
+                qtype: row.get(4)?,
+                rcode: row.get(5)?,
+                answers: row.get(6)?,
+                ttl: row.get(7)?,
+            })
+        })
+    }
+
+    pub fn count_dns_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) =
+            search_filter(&["query", "answers", "qtype", "rcode", "client_ip"], q, 1);
+        self.count_query_rows(SELECT_DNS_BASE, &filter, params)
+    }
+
+    pub fn list_tls_query(&self, q: &ListQuery) -> Result<Vec<TlsObservation>> {
+        let (filter, params) = search_filter(
+            &[
+                "server_name",
+                "client_ip",
+                "server_ip",
+                "version",
+                "validation_status",
+            ],
+            q,
+            3,
+        );
+        let order = order_clause(
+            q,
+            &[
+                ("time", "ts"),
+                ("sniname", "server_name"),
+                ("client", "client_ip"),
+                ("server", "server_ip"),
+                ("version", "version"),
+                ("validation", "validation_status"),
+            ],
+            "ts DESC, id DESC",
+        );
+        self.list_query_rows(SELECT_TLS_BASE, &filter, &order, params, q, |row| {
+            Ok(TlsObservation {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                client_ip: row.get(2)?,
+                server_ip: row.get(3)?,
+                server_port: row.get::<_, Option<i64>>(4)?.map(|value| value as u16),
+                server_name: row.get(5)?,
+                version: row.get(6)?,
+                validation_status: row.get(7)?,
+                subject: row.get(8)?,
+                issuer: row.get(9)?,
+            })
+        })
+    }
+
+    pub fn count_tls_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(
+            &[
+                "server_name",
+                "client_ip",
+                "server_ip",
+                "version",
+                "validation_status",
+            ],
+            q,
+            1,
+        );
+        self.count_query_rows(SELECT_TLS_BASE, &filter, params)
+    }
+
+    pub fn list_http_query(&self, q: &ListQuery) -> Result<Vec<HttpObservation>> {
+        let (filter, params) = search_filter(
+            &[
+                "host",
+                "uri",
+                "method",
+                "client_ip",
+                "server_ip",
+                "user_agent",
+            ],
+            q,
+            3,
+        );
+        let order = order_clause(
+            q,
+            &[
+                ("time", "ts"),
+                ("method", "method"),
+                ("host", "host"),
+                ("uri", "uri"),
+                ("client", "client_ip"),
+                ("server", "server_ip"),
+                ("status", "status_code"),
+            ],
+            "ts DESC, id DESC",
+        );
+        self.list_query_rows(SELECT_HTTP_BASE, &filter, &order, params, q, |row| {
+            Ok(HttpObservation {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                client_ip: row.get(2)?,
+                server_ip: row.get(3)?,
+                server_port: row.get::<_, Option<i64>>(4)?.map(|value| value as u16),
+                method: row.get(5)?,
+                host: row.get(6)?,
+                uri: row.get(7)?,
+                user_agent: row.get(8)?,
+                status_code: row.get(9)?,
+            })
+        })
+    }
+
+    pub fn count_http_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(
+            &[
+                "host",
+                "uri",
+                "method",
+                "client_ip",
+                "server_ip",
+                "user_agent",
+            ],
+            q,
+            1,
+        );
+        self.count_query_rows(SELECT_HTTP_BASE, &filter, params)
+    }
+
+    pub fn list_quic_query(&self, q: &ListQuery) -> Result<Vec<QuicObservation>> {
+        let (filter, params) = search_filter(
+            &["server_name", "client_ip", "server_ip", "client_protocol"],
+            q,
+            3,
+        );
+        let order = order_clause(
+            q,
+            &[
+                ("time", "ts"),
+                ("sniname", "server_name"),
+                ("client", "client_ip"),
+                ("server", "server_ip"),
+                ("protocol", "client_protocol"),
+            ],
+            "ts DESC, id DESC",
+        );
+        self.list_query_rows(SELECT_QUIC_BASE, &filter, &order, params, q, |row| {
+            Ok(QuicObservation {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                client_ip: row.get(2)?,
+                server_ip: row.get(3)?,
+                server_port: row.get::<_, Option<i64>>(4)?.map(|value| value as u16),
+                server_name: row.get(5)?,
+                client_protocol: row.get(6)?,
+            })
+        })
+    }
+
+    pub fn count_quic_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(
+            &["server_name", "client_ip", "server_ip", "client_protocol"],
+            q,
+            1,
+        );
+        self.count_query_rows(SELECT_QUIC_BASE, &filter, params)
+    }
+
+    pub fn list_domains_query(&self, q: &ListQuery) -> Result<Vec<DomainSummary>> {
+        let (filter, params) = search_filter(&["d.registrable_domain", "d.domain"], q, 3);
+        let order = order_clause(
+            q,
+            &[
+                ("domain", "d.registrable_domain"),
+                ("hostnames", "COUNT(d.domain)"),
+                ("sources", "SUM(d.observation_count)"),
+                ("trust", "COALESCE(t.state, 'unknown')"),
+                ("flags", "SUM(d.observation_count)"),
+                ("ips", "COUNT(DISTINCT d.domain)"),
+                ("processes", "SUM(d.observation_count)"),
+                ("observed", "SUM(d.observation_count)"),
+                ("first_seen", "MIN(d.first_seen)"),
+                ("last_seen", "MAX(d.last_seen)"),
+            ],
+            "MAX(d.last_seen) DESC",
+        );
+        let base = SELECT_DOMAIN_BASE.replace("/*FILTER*/", &filter);
+        self.list_query_rows(&base, "", &order, params, q, |row| {
+            let trust: String = row.get(1)?;
+            let trust_state = TrustState::parse(&trust).unwrap_or_default();
+            let first_seen: i64 = row.get(2)?;
+            let hostnames: Option<String> = row.get(5)?;
+            let sources: Option<String> = row.get(6)?;
+            let now = unix_now();
+            let mut flags = Vec::new();
+            if trust_state == TrustState::Unknown {
+                flags.push(ReviewFlag::UnknownTrust);
+            }
+            if now.saturating_sub(first_seen) <= 86_400 {
+                flags.push(ReviewFlag::NewDomain);
+            }
+            if row.get::<_, i64>(9)? != 0 {
+                flags.push(ReviewFlag::Alerts);
+            }
+            if row.get::<_, i64>(10)? != 0 {
+                flags.push(ReviewFlag::InvalidTls);
+            }
+            Ok(DomainSummary {
+                domain: row.get(0)?,
+                hostnames: hostnames
+                    .unwrap_or_default()
+                    .split('\u{1f}')
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                sources: sources
+                    .unwrap_or_default()
+                    .split('\u{1f}')
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                trust_state,
+                first_seen,
+                last_seen: row.get(3)?,
+                observation_count: row.get::<_, i64>(4)? as u64,
+                endpoint_count: row.get::<_, i64>(7)? as u64,
+                process_count: row.get::<_, i64>(8)? as u64,
+                flags,
+            })
+        })
+    }
+
+    pub fn count_domains_query(&self, q: &ListQuery) -> Result<u64> {
+        let (filter, params) = search_filter(&["d.registrable_domain", "d.domain"], q, 1);
+        let base = SELECT_DOMAIN_BASE.replace("/*FILTER*/", &filter);
+        self.count_query_rows(&base, "", params)
+    }
+
+    fn list_query_rows<T, F>(
+        &self,
+        base: &str,
+        filter: &str,
+        order: &str,
+        search_params: Vec<SqlValue>,
+        q: &ListQuery,
+        mapper: F,
+    ) -> Result<Vec<T>>
+    where
+        F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    {
+        let (limit, offset) = page_values(q);
+        let mut params = vec![SqlValue::Integer(limit), SqlValue::Integer(offset)];
+        params.extend(search_params);
+        let sql = format!("{base} {filter} {order} LIMIT ?1 OFFSET ?2");
+        let mut statement = self.conn.prepare(&sql).map_err(db)?;
+        let rows = statement
+            .query_map(params_from_iter(params), mapper)
+            .map_err(db)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
+    }
+
+    fn count_query_rows(
+        &self,
+        base: &str,
+        filter: &str,
+        search_params: Vec<SqlValue>,
+    ) -> Result<u64> {
+        let sql = format!("SELECT COUNT(*) FROM ({base} {filter})");
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(search_params), |row| row.get(0))
+            .map_err(db)?;
+        Ok(count as u64)
+    }
+
     fn count(&self, sql: &str) -> Result<u64> {
         let count: i64 = self.conn.query_row(sql, [], |row| row.get(0)).map_err(db)?;
         Ok(count as u64)
     }
+
+    pub fn get_settings(&self) -> Result<AppSettings> {
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![SETTINGS_KEY],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        let mut settings = stored
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<AppSettings>(value).ok())
+            .unwrap_or_default();
+        settings.validate();
+        Ok(settings)
+    }
+
+    fn import_legacy_gui_settings(&self, db_path: &Path) -> Result<()> {
+        let legacy = db_path
+            .parent()
+            .map(|parent| parent.join("pigui-gui.db"))
+            .unwrap_or_else(|| Path::new("pigui-gui.db").to_path_buf());
+        if !legacy.is_file() {
+            return Ok(());
+        }
+        let has_settings: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![SETTINGS_KEY],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        if has_settings.is_some() {
+            return Ok(());
+        }
+        let legacy_conn = SqlConnection::open_with_flags(
+            &legacy,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(db)?;
+        let theme: Option<String> = legacy_conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ui.theme'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        if let Some(theme) = theme.and_then(|value| ThemeMode::parse(&value)) {
+            let mut settings = AppSettings::default();
+            settings.theme = theme;
+            self.save_settings(&settings)?;
+        }
+        let migrated = legacy.with_extension("db.migrated");
+        let _ = std::fs::rename(&legacy, migrated);
+        Ok(())
+    }
+
+    pub fn save_settings(&self, settings: &AppSettings) -> Result<()> {
+        let mut settings = settings.clone();
+        settings.validate();
+        let value = serde_json::to_string(&settings)?;
+        self.conn
+            .execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value,
+                     updated_at = excluded.updated_at",
+                params![SETTINGS_KEY, value, unix_now()],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    pub fn update_settings(&self, patch: &serde_json::Value) -> Result<AppSettings> {
+        let mut current = serde_json::to_value(self.get_settings()?)?;
+        merge_json(&mut current, patch);
+        let mut settings: AppSettings = serde_json::from_value(current)?;
+        settings.validate();
+        self.save_settings(&settings)?;
+        Ok(settings)
+    }
+
+    pub fn reset_settings(&self) -> Result<AppSettings> {
+        let settings = AppSettings::default();
+        self.save_settings(&settings)?;
+        Ok(settings)
+    }
+
+    pub fn table_counts(&self) -> Result<Vec<TableCount>> {
+        let tables = [
+            "alerts",
+            "endpoints",
+            "processes",
+            "flows",
+            "connections",
+            "dns_observations",
+            "tls_observations",
+            "http_observations",
+            "quic_observations",
+            "domains",
+            "endpoint_domains",
+            "ptr_observations",
+        ];
+        let mut counts = Vec::with_capacity(tables.len());
+        for table in tables {
+            let rows = self.count(&format!("SELECT COUNT(*) FROM {table}"))?;
+            counts.push(TableCount {
+                name: table.to_string(),
+                rows,
+            });
+        }
+        Ok(counts)
+    }
+
+    pub fn prune(&self, settings: &AppSettings) -> Result<PruneResult> {
+        let now = unix_now();
+        let retention = &settings.retention;
+        let mut deleted = Vec::new();
+
+        let mut record = |name: &str, rows: u64| {
+            if rows > 0 {
+                deleted.push(TableCount {
+                    name: name.to_string(),
+                    rows,
+                });
+            }
+        };
+
+        record(
+            "flows",
+            delete_older_than(&self.conn, "flows", "last_seen", now - retention.flows_secs)?,
+        );
+        record(
+            "processes",
+            delete_older_than(
+                &self.conn,
+                "processes",
+                "last_seen",
+                now - retention.processes_secs,
+            )?,
+        );
+        record(
+            "alerts",
+            delete_older_than(
+                &self.conn,
+                "alerts",
+                "event_ts",
+                now - i64::from(retention.alerts_days) * 86_400,
+            )?,
+        );
+        record(
+            "connections",
+            delete_older_than(
+                &self.conn,
+                "connections",
+                "ts",
+                now - i64::from(retention.connections_days) * 86_400,
+            )?,
+        );
+        for table in [
+            "dns_observations",
+            "tls_observations",
+            "http_observations",
+            "quic_observations",
+        ] {
+            record(
+                table,
+                delete_older_than(
+                    &self.conn,
+                    table,
+                    "ts",
+                    now - i64::from(retention.observations_days) * 86_400,
+                )?,
+            );
+        }
+        record(
+            "ptr_observations",
+            delete_older_than(
+                &self.conn,
+                "ptr_observations",
+                "last_seen",
+                now - i64::from(retention.ptr_days) * 86_400,
+            )?,
+        );
+        record(
+            "endpoint_domains",
+            delete_older_than(
+                &self.conn,
+                "endpoint_domains",
+                "last_seen",
+                now - i64::from(retention.domains_days) * 86_400,
+            )?,
+        );
+        let domains_cutoff = now - i64::from(retention.domains_days) * 86_400;
+        let domains_deleted = self
+            .conn
+            .execute(
+                "DELETE FROM domains
+                 WHERE last_seen < ?1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM endpoint_domains ed WHERE ed.domain = domains.domain
+                   )",
+                params![domains_cutoff],
+            )
+            .map_err(db)?;
+        record("domains", domains_deleted as u64);
+        record(
+            "endpoints",
+            delete_older_than(
+                &self.conn,
+                "endpoints",
+                "last_seen",
+                now - i64::from(retention.endpoints_days) * 86_400,
+            )?,
+        );
+
+        self.conn.execute_batch("PRAGMA optimize").map_err(db)?;
+        let _ = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+
+        let total_deleted = deleted.iter().map(|entry| entry.rows).sum();
+        Ok(PruneResult {
+            ran_at: now,
+            deleted,
+            total_deleted,
+        })
+    }
+}
+
+const SETTINGS_KEY: &str = "app";
+
+fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(patch)) => {
+            for (key, value) in patch {
+                merge_json(
+                    base.entry(key.clone()).or_insert(serde_json::Value::Null),
+                    value,
+                );
+            }
+        }
+        (base, patch) => *base = patch.clone(),
+    }
+}
+
+fn delete_older_than(conn: &SqlConnection, table: &str, column: &str, cutoff: i64) -> Result<u64> {
+    let batch = 10_000i64;
+    let mut total = 0u64;
+    loop {
+        let sql = format!(
+            "DELETE FROM {table}
+             WHERE rowid IN (
+                 SELECT rowid FROM {table} WHERE {column} < ?1 LIMIT ?2
+             )"
+        );
+        let removed = conn.execute(&sql, params![cutoff, batch]).map_err(db)? as u64;
+        total += removed;
+        if removed < batch as u64 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 fn ensure_endpoints_hostname(conn: &SqlConnection) -> Result<()> {
@@ -1719,6 +2732,98 @@ fn read_schema_version(conn: &SqlConnection) -> Result<Option<String>> {
     .map_err(db)
 }
 
+fn page_values(q: &ListQuery) -> (i64, i64) {
+    (
+        i64::from(q.limit.unwrap_or(200)),
+        i64::from(q.offset.unwrap_or(0)),
+    )
+}
+
+fn search_filter(columns: &[&str], q: &ListQuery, start_index: usize) -> (String, Vec<SqlValue>) {
+    let Some(term) =
+        q.q.as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    else {
+        return (String::new(), Vec::new());
+    };
+    let pattern = format!("%{term}%");
+    let mut clauses = Vec::with_capacity(columns.len());
+    let mut params = Vec::with_capacity(columns.len());
+    for (offset, column) in columns.iter().enumerate() {
+        clauses.push(format!(
+            "COALESCE({column}, '') LIKE ?{}",
+            start_index + offset
+        ));
+        params.push(SqlValue::Text(pattern.clone()));
+    }
+    (format!("WHERE ({})", clauses.join(" OR ")), params)
+}
+
+fn order_clause(q: &ListQuery, columns: &[(&str, &'static str)], default_order: &str) -> String {
+    let Some(sort) = q.sort.as_deref().filter(|sort| !sort.is_empty()) else {
+        return format!("ORDER BY {default_order}");
+    };
+    let expression = columns
+        .iter()
+        .find(|(column, _)| *column == sort)
+        .map(|(_, expression)| *expression)
+        .unwrap_or(default_order);
+    let direction = q.dir.unwrap_or(SortDirection::Desc).as_str();
+    format!("ORDER BY {expression} {direction}")
+}
+
+fn set_schema_version(conn: &SqlConnection, version: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('version', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![version],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+fn migrate_v5(conn: &SqlConnection) -> Result<()> {
+    conn.execute(
+        "UPDATE connections SET proto = lower(proto) WHERE proto IS NOT NULL",
+        [],
+    )
+    .map_err(db)?;
+    conn.execute(
+        "UPDATE connections
+         SET pid = (
+                 SELECT f.pid FROM flows f
+                 WHERE lower(f.proto) = lower(connections.proto)
+                   AND f.client_ip = connections.client_ip
+                   AND f.client_port = connections.client_port
+                   AND f.server_ip = connections.server_ip
+                   AND f.server_port = connections.server_port
+                 LIMIT 1
+             ),
+             process_name = (
+                 SELECT f.process_name FROM flows f
+                 WHERE lower(f.proto) = lower(connections.proto)
+                   AND f.client_ip = connections.client_ip
+                   AND f.client_port = connections.client_port
+                   AND f.server_ip = connections.server_ip
+                   AND f.server_port = connections.server_port
+                 LIMIT 1
+             )
+         WHERE pid IS NULL
+           AND EXISTS (
+                 SELECT 1 FROM flows f
+                 WHERE lower(f.proto) = lower(connections.proto)
+                   AND f.client_ip = connections.client_ip
+                   AND f.client_port = connections.client_port
+                   AND f.server_ip = connections.server_ip
+                   AND f.server_port = connections.server_port
+           )",
+        [],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
 fn backfill_domains(conn: &SqlConnection) -> Result<()> {
     let tx = conn.unchecked_transaction().map_err(db)?;
 
@@ -1883,9 +2988,12 @@ fn destination_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Destination
         bytes_out: row.get::<_, i64>(5)? as u64,
         connection_count: row.get::<_, i64>(6)? as u64,
         process_count: row.get::<_, i64>(7)? as u64,
-        alert_count: row.get::<_, i64>(8)? as u64,
-        reputation: row.get(9)?,
-        blocked: row.get::<_, i64>(10)? != 0,
+        live_bytes_in: row.get::<_, i64>(8)? as u64,
+        live_bytes_out: row.get::<_, i64>(9)? as u64,
+        live_connection_count: row.get::<_, i64>(10)? as u64,
+        alert_count: row.get::<_, i64>(11)? as u64,
+        reputation: row.get(12)?,
+        blocked: row.get::<_, i64>(13)? != 0,
         domains: Vec::new(),
         trust_state: TrustState::Unknown,
         flags: Vec::new(),
@@ -2132,7 +3240,7 @@ mod tests {
         store.apply_snapshot(&snapshot, 1000).unwrap();
 
         let record = extractor(
-            r#"{"ts":1001,"uid":"C1","id.orig_h":"10.0.0.5","id.orig_p":50000,"id.resp_h":"198.51.100.10","id.resp_p":443,"proto":"tcp","service":"ssl","conn_state":"SF","duration":1.0,"orig_pkts":2,"resp_pkts":3,"orig_bytes":100,"resp_bytes":200}"#,
+            r#"{"ts":1001,"uid":"C1","id.orig_h":"10.0.0.5","id.orig_p":50000,"id.resp_h":"198.51.100.10","id.resp_p":443,"proto":"TCP","service":"ssl","conn_state":"SF","duration":1.0,"orig_pkts":2,"resp_pkts":3,"orig_bytes":100,"resp_bytes":200}"#,
         );
         store.insert_extractor_records(&[record], 1001).unwrap();
 
@@ -2289,7 +3397,15 @@ mod tests {
         assert_eq!(store.pending_ptr_ips(100, 10).unwrap().len(), 1);
 
         store
-            .save_ptr_result("203.0.113.9", Some("host.example.com"), "ok", None, 100)
+            .save_ptr_result(
+                "203.0.113.9",
+                Some("host.example.com"),
+                "ok",
+                None,
+                100,
+                86_400,
+                21_600,
+            )
             .unwrap();
         let domains = store.endpoint_domains("203.0.113.9").unwrap();
         assert_eq!(domains.len(), 1);
@@ -2339,10 +3455,140 @@ mod tests {
         assert_eq!(process.destinations[0].ip, "198.51.100.10");
         assert_eq!(process.destinations[0].domains.len(), 1);
         assert_eq!(process.destinations[0].domains[0].domain, "api.spotify.com");
+        assert_eq!(process.destinations[0].live_bytes_in, 200);
+        assert_eq!(process.destinations[0].live_bytes_out, 100);
 
         let destination = store.destination_detail("198.51.100.10").unwrap().unwrap();
         assert_eq!(destination.processes.len(), 1);
         assert_eq!(destination.processes[0].pid, Some(42));
+        assert_eq!(destination.processes[0].live_bytes_in, 200);
+        assert_eq!(destination.processes[0].live_bytes_out, 100);
         assert_eq!(destination.destination.domains.len(), 1);
+        assert_eq!(destination.destination.live_bytes_in, 200);
+        assert_eq!(destination.destination.live_bytes_out, 100);
+    }
+
+    #[test]
+    fn settings_round_trip_and_reset() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.get_settings().unwrap(), AppSettings::default());
+
+        let updated = store
+            .update_settings(&serde_json::json!({
+                "theme": "dark",
+                "ui": { "page_size": 50 },
+                "retention": { "alerts_days": 7 }
+            }))
+            .unwrap();
+        assert_eq!(updated.theme, ThemeMode::Dark);
+        assert_eq!(updated.ui.page_size, 50);
+        assert_eq!(updated.retention.alerts_days, 7);
+        assert_eq!(store.get_settings().unwrap(), updated);
+
+        let reset = store.reset_settings().unwrap();
+        assert_eq!(reset, AppSettings::default());
+    }
+
+    #[test]
+    fn retention_prunes_old_rows_and_keeps_recent_rows() {
+        let mut store = Store::open_in_memory().unwrap();
+        let now = unix_now();
+        store
+            .insert_alerts(&[
+                alert(10, 1, "198.51.100.10", 443),
+                alert(now, 2, "198.51.100.11", 443),
+            ])
+            .unwrap();
+        assert_eq!(store.count_alerts().unwrap(), 2);
+
+        let settings = store.get_settings().unwrap();
+        let result = store.prune(&settings).unwrap();
+        assert!(result.total_deleted >= 1);
+        assert_eq!(store.count_alerts().unwrap(), 1);
+        assert_eq!(store.count_destinations().unwrap(), 1);
+    }
+
+    #[test]
+    fn searches_and_sorts_destinations_and_domains() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .insert_alerts(&[
+                alert(10, 1, "198.51.100.10", 443),
+                alert(20, 2, "203.0.113.9", 443),
+            ])
+            .unwrap();
+        store
+            .insert_extractor_records(
+                &[extractor(
+                    r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"api.spotify.com","version":"TLSv1.3","validation_status":"valid"}"#,
+                )],
+                1001,
+            )
+            .unwrap();
+
+        let destinations = store
+            .list_destinations_query(&ListQuery {
+                q: Some("198.51".into()),
+                sort: Some("ip".into()),
+                dir: Some(SortDirection::Asc),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(destinations[0].ip, "198.51.100.10");
+        assert_eq!(
+            store
+                .count_destinations_query(&ListQuery {
+                    q: Some("198.51".into()),
+                    ..Default::default()
+                })
+                .unwrap(),
+            1
+        );
+
+        let domains = store
+            .list_domains_query(&ListQuery {
+                q: Some("spotify".into()),
+                sort: Some("domain".into()),
+                dir: Some(SortDirection::Asc),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].domain, "spotify.com");
+    }
+
+    #[test]
+    fn paginates_filters_and_sorts_alerts() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut entries = Vec::new();
+        for (index, message) in ["alpha", "beta", "gamma", "delta"].iter().enumerate() {
+            let json = format!(
+                r#"{{"seconds":{},"sid":{},"gid":1,"rev":1,"proto":"TCP","src_addr":"10.0.0.5","src_port":1234,"dst_addr":"198.51.100.10","dst_port":443,"action":"allowed","msg":"{message}"}}"#,
+                100 + index,
+                index + 1
+            );
+            entries.push((Alert::parse(&json).unwrap(), json));
+        }
+        store.insert_alerts(&entries).unwrap();
+
+        let query = ListQuery {
+            limit: Some(2),
+            offset: Some(1),
+            q: None,
+            sort: Some("time".into()),
+            dir: Some(SortDirection::Asc),
+        };
+        let alerts = store.list_alerts_query(&query).unwrap();
+        assert_eq!(alerts.len(), 2);
+        assert_eq!(alerts[0].alert.sid, 2);
+        assert_eq!(store.count_alerts_query(&query).unwrap(), 4);
+
+        let filtered = ListQuery {
+            q: Some("gamma".into()),
+            ..Default::default()
+        };
+        assert_eq!(store.list_alerts_query(&filtered).unwrap().len(), 1);
+        assert_eq!(store.count_alerts_query(&filtered).unwrap(), 1);
     }
 }

@@ -16,7 +16,7 @@ what is planned.
 | M6 | PF helper in dry-run mode | Partial: SMAppService/XPC helper and dry-run actions implemented; PF execution pending |
 | M7 | Daemon API and GUI MVP | Partial: live processes/connections/destinations/alerts/domains/DNS API and tabs complete |
 | M8 | launchd packaging and macOS system integration | Partial: signed/notarized/stapled app and DMG implemented; installed helper launch verification pending |
-| M9 | Hardening, retention, audit, tests, documentation | Partial: tests and docs exist; retention, audit, and hardening pending |
+| M9 | Hardening, retention, audit, tests, documentation | Partial: retention, tests, and docs exist; audit and hardening pending |
 | M10 | Linux/ufw/nftables and Windows support | In progress |
 
 ## Implemented
@@ -47,7 +47,7 @@ what is planned.
   firewall actions exist; PF execution, capture-state persistence across helper
   restarts, and fuller GUI onboarding remain.
 - Rule bundles and policy engine.
-- Retention and log rotation.
+- Log rotation (database retention is implemented).
 - Sensor stats and firewall action history; helper privileged-action audit exists.
 - `/Applications` helper registration/approval verification and full production onboarding.
 - Linux and Windows adapters.

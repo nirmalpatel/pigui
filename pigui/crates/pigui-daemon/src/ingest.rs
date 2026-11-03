@@ -136,11 +136,11 @@ pub fn spawn_process_collector(state: Arc<AppState>) {
             .clone()
             .or_else(pigui_collector::default_interface);
         let collector = MacosCollector::new(interface.clone());
-        let poll = Duration::from_millis(state.config.process_poll_ms.max(250));
+        let initial_poll = state.settings().collector.poll_ms.max(250);
 
         tracing::info!(
             interface = interface.as_deref().unwrap_or("all"),
-            poll_ms = poll.as_millis(),
+            poll_ms = initial_poll,
             "process collector started"
         );
 
@@ -164,7 +164,44 @@ pub fn spawn_process_collector(state: Arc<AppState>) {
                     tracing::warn!(%error, "nettop collection failed");
                 }
             }
-            std::thread::sleep(poll);
+            std::thread::sleep(Duration::from_millis(
+                state.settings().collector.poll_ms.max(250),
+            ));
+        }
+    });
+}
+
+pub fn spawn_maintenance(state: Arc<AppState>) {
+    std::thread::spawn(move || {
+        loop {
+            let settings = state.settings();
+            let result = match state.store.lock() {
+                Ok(store) => store.prune(&settings),
+                Err(_) => return,
+            };
+            match result {
+                Ok(report) => {
+                    if report.total_deleted > 0 {
+                        tracing::info!(
+                            deleted = report.total_deleted,
+                            "maintenance pruned old rows"
+                        );
+                    }
+                    state.record_maintenance(&report);
+                }
+                Err(error) => tracing::warn!(%error, "maintenance prune failed"),
+            }
+
+            let interval = state.settings().maintenance.interval_secs.max(30);
+            let mut remaining = interval;
+            while remaining > 0 && !state.is_shutting_down() {
+                let step = remaining.min(1);
+                std::thread::sleep(Duration::from_secs(step));
+                remaining -= step;
+            }
+            if state.is_shutting_down() {
+                return;
+            }
         }
     });
 }
@@ -174,11 +211,12 @@ pub fn spawn_name_resolver(state: Arc<AppState>) {
         while !state.is_shutting_down() {
             resolve_ptr_names(&state);
             resolve_watched_domains(&state);
-            for _ in 0..150 {
-                if state.is_shutting_down() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(200));
+            let loop_secs = state.settings().resolver.loop_secs.max(5);
+            let mut remaining = loop_secs;
+            while remaining > 0 && !state.is_shutting_down() {
+                let step = remaining.min(1);
+                std::thread::sleep(Duration::from_secs(step));
+                remaining -= step;
             }
         }
     });
@@ -186,8 +224,11 @@ pub fn spawn_name_resolver(state: Arc<AppState>) {
 
 fn resolve_ptr_names(state: &Arc<AppState>) {
     let now = crate::store::unix_now();
+    let settings = state.settings();
     let ips = match state.store.lock() {
-        Ok(store) => store.pending_ptr_ips(now, 10).unwrap_or_default(),
+        Ok(store) => store
+            .pending_ptr_ips(now, settings.resolver.ptr_batch)
+            .unwrap_or_default(),
         Err(_) => return,
     };
 
@@ -200,8 +241,15 @@ fn resolve_ptr_names(state: &Arc<AppState>) {
         };
         if !is_public_ip(address) {
             if let Ok(store) = state.store.lock() {
-                let _ =
-                    store.save_ptr_result(&ip, None, "skipped", Some("non-public address"), now);
+                let _ = store.save_ptr_result(
+                    &ip,
+                    None,
+                    "skipped",
+                    Some("non-public address"),
+                    now,
+                    settings.resolver.ptr_ok_ttl_secs,
+                    settings.resolver.ptr_fail_ttl_secs,
+                );
             }
             continue;
         }
@@ -210,11 +258,26 @@ fn resolve_ptr_names(state: &Arc<AppState>) {
         if let Ok(store) = state.store.lock() {
             match result {
                 Ok(hostname) => {
-                    let _ = store.save_ptr_result(&ip, Some(&hostname), "ok", None, now);
+                    let _ = store.save_ptr_result(
+                        &ip,
+                        Some(&hostname),
+                        "ok",
+                        None,
+                        now,
+                        settings.resolver.ptr_ok_ttl_secs,
+                        settings.resolver.ptr_fail_ttl_secs,
+                    );
                 }
                 Err(error) => {
-                    let _ =
-                        store.save_ptr_result(&ip, None, "error", Some(&error.to_string()), now);
+                    let _ = store.save_ptr_result(
+                        &ip,
+                        None,
+                        "error",
+                        Some(&error.to_string()),
+                        now,
+                        settings.resolver.ptr_ok_ttl_secs,
+                        settings.resolver.ptr_fail_ttl_secs,
+                    );
                 }
             }
         }
@@ -224,8 +287,15 @@ fn resolve_ptr_names(state: &Arc<AppState>) {
 
 fn resolve_watched_domains(state: &Arc<AppState>) {
     let now = crate::store::unix_now();
+    let settings = state.settings();
     let due = match state.store.lock() {
-        Ok(store) => store.due_watched_domains(now, 900, 10).unwrap_or_default(),
+        Ok(store) => store
+            .due_watched_domains(
+                now,
+                settings.resolver.watched_interval_secs,
+                settings.resolver.watched_batch,
+            )
+            .unwrap_or_default(),
         Err(_) => return,
     };
 

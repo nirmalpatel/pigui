@@ -156,9 +156,12 @@ Current join rules:
 - `nettop` flow rows are deleted when `last_seen` is older than 600 seconds.
 - Processes are deleted when `last_seen` is older than 86,400 seconds.
 - Completed extractor connections are stored by `uid`.
+- Snort extractor protocol names are normalized to lowercase, matching
+  `nettop` flows, before the 5-tuple process lookup.
 - When a connection is inserted, PIGUI looks up the process from `flows` using
   the same 5-tuple. If a live flow matches, the connection copies the PID and
-  process name.
+  process name. Schema migration v5 also lowercases existing connection
+  protocols and performs a best-effort backfill from live flows.
 - Alerts are not joined to flows by PIGUI yet; they carry their own 5-tuple and
   destination aggregation.
 
@@ -187,7 +190,7 @@ capture started, historical mappings cannot be reconstructed exactly.
 
 ## SQLite schema
 
-Schema version: `4`, stored in `schema_meta`.
+Schema version: `5`, stored in `schema_meta`.
 
 ### `alerts`
 
@@ -225,7 +228,12 @@ last_seen`
 
 Unique key: the 5-tuple. Indexed by `last_seen`, `server_ip`, and `pid`.
 `packets_ab` and `packets_ba` are currently always zero because `nettop` does
-not provide packet counts.
+not provide packet counts. Byte direction is normalised: `bytes_ab` is client
+to server and `bytes_ba` is server to client, matching `connections`.
+
+Destination rows keep Snort-completed byte and connection totals. Live
+`nettop` totals are computed from `flows` on read and exposed separately as
+`live_bytes_in`, `live_bytes_out`, and `live_connection_count`.
 
 ### `connections`
 
@@ -268,6 +276,12 @@ expires_at`
 `watched_domains`: `domain, registrable_domain, enabled, last_resolved_at,
 last_error`
 
+### `app_settings`
+
+`key, value, updated_at`. PIGUI stores the validated settings document under
+the `app` key. The GUI reads and writes it through RPC, so the daemon remains
+the only process that opens the database.
+
 ### Planned tables
 
 The original design also listed `firewall_actions`, `rule_bundles`,
@@ -275,18 +289,23 @@ The original design also listed `firewall_actions`, `rule_bundles`,
 
 ## Retention
 
-Implemented cleanup:
+Implemented cleanup runs from the daemon maintenance task and is configurable
+in the Settings tab:
 
-- Live flows older than 10 minutes.
-- Process rows older than 24 hours.
-
-Planned retention (not implemented):
-
+- Live flows: 10 minutes
+- Process rows: 24 hours
 - Raw alerts: 30 days
-- Connection/flow detail: 7 days
-- Aggregates: 90 days
-- Audit log: at least 1 year
-- Optional size-bounded pcap ring buffer, disabled by default
+- Completed connections: 7 days
+- DNS/TLS/HTTP/QUIC observations: 7 days
+- Domains/endpoint mappings: 90 days
+- Endpoints: 90 days
+- PTR observations: 30 days
+
+`maintenance.stats` reports database size, per-table row counts, the last run,
+and rows deleted. `maintenance.prune_now` runs the same cleanup immediately.
+
+Settings are stored in the `app_settings` table in the same `pigui.db`. There
+is no separate GUI settings database.
 
 SQLite with WAL is the first storage choice. A separate analytical store can be
 evaluated if volume grows.

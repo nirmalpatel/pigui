@@ -1,9 +1,11 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, RwLock};
 use std::time::Instant;
 
 use pigui_core::Config;
 use pigui_core::models::SnortCapabilities;
+use pigui_core::rpc::PruneResult;
+use pigui_core::settings::AppSettings;
 use tokio::sync::Notify;
 
 use crate::store::{IngestStats, Store};
@@ -19,6 +21,9 @@ pub struct AppState {
     pub extractor_ingested: AtomicU64,
     pub extractor_last_ingest: AtomicU64,
     pub last_snapshot_ts: AtomicU64,
+    settings: RwLock<AppSettings>,
+    maintenance_last_run: AtomicU64,
+    maintenance_last_deleted: AtomicU64,
     collector_error: Mutex<Option<String>>,
     shutting_down: AtomicBool,
     shutdown: Notify,
@@ -26,6 +31,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config, store: Store, capabilities: SnortCapabilities) -> Self {
+        let settings = store.get_settings().unwrap_or_default();
         Self {
             config,
             store: Mutex::new(store),
@@ -36,6 +42,9 @@ impl AppState {
             extractor_ingested: AtomicU64::new(0),
             extractor_last_ingest: AtomicU64::new(0),
             last_snapshot_ts: AtomicU64::new(0),
+            settings: RwLock::new(settings),
+            maintenance_last_run: AtomicU64::new(0),
+            maintenance_last_deleted: AtomicU64::new(0),
             collector_error: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             shutdown: Notify::new(),
@@ -64,6 +73,34 @@ impl AppState {
     pub fn extractor_last_ingest(&self) -> Option<i64> {
         let value = self.extractor_last_ingest.load(Ordering::Relaxed);
         (value > 0).then_some(value as i64)
+    }
+
+    pub fn settings(&self) -> AppSettings {
+        self.settings
+            .read()
+            .map(|settings| settings.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_settings(&self, settings: AppSettings) {
+        if let Ok(mut current) = self.settings.write() {
+            *current = settings;
+        }
+    }
+
+    pub fn record_maintenance(&self, result: &PruneResult) {
+        self.maintenance_last_run
+            .store(result.ran_at.max(0) as u64, Ordering::Relaxed);
+        self.maintenance_last_deleted
+            .store(result.total_deleted, Ordering::Relaxed);
+    }
+
+    pub fn maintenance_info(&self) -> (Option<i64>, u64) {
+        let last_run = self.maintenance_last_run.load(Ordering::Relaxed);
+        (
+            (last_run > 0).then_some(last_run as i64),
+            self.maintenance_last_deleted.load(Ordering::Relaxed),
+        )
     }
 
     pub fn record_snapshot(&self, now: i64) {

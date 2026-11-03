@@ -15,16 +15,36 @@
     type SortState,
   } from "../sort";
   import type {
+    ListQueryState,
     Process,
     ProcessDestination,
     ProcessDetail,
   } from "../types";
   import SortHeader from "./SortHeader.svelte";
 
-  let { processes }: { processes: Process[] } = $props();
+  let {
+    processes,
+    onQuery,
+  }: {
+    processes: Process[];
+    onQuery?: (query: ListQueryState) => void;
+  } = $props();
 
   let filter = $state("");
   let processSort = $state<SortState | null>(null);
+
+  function emitQuery() {
+    onQuery?.({
+      q: filter.trim() || undefined,
+      sort: processSort?.key,
+      dir: processSort?.direction,
+    });
+  }
+
+  function toggleProcessSort(key: string) {
+    processSort = toggleSort(processSort, key);
+    emitQuery();
+  }
   let processDestinationSort = $state<SortState | null>(null);
   let expandedProcess = $state<number | null>(null);
   let processDetail = $state<ProcessDetail | null>(null);
@@ -46,7 +66,11 @@
     domains: (destination) => domainLabel(destination.domains),
     trust: (destination) => trustOrder[destination.trust_state],
     flags: (destination) => destination.flags.length,
-    traffic: (destination) => destination.bytes_in + destination.bytes_out,
+    traffic: (destination) =>
+      destination.snort_bytes_in +
+      destination.snort_bytes_out +
+      destination.live_bytes_in +
+      destination.live_bytes_out,
     connections: (destination) => destination.connection_count,
     last_seen: (destination) => destination.last_seen,
   };
@@ -95,21 +119,21 @@
 <section class="panel fill">
   <div class="panel-header">
     <h2>Processes</h2>
-    <input type="search" placeholder="Filter processes" bind:value={filter} />
+    <input type="search" placeholder="Filter processes" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>
       <thead>
         <tr>
           <th></th>
-          <SortHeader label="Process" column="process" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="PID" column="pid" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="User" column="user" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="Connections" column="connections" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="Bytes in" column="bytes_in" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="Bytes out" column="bytes_out" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="Path" column="path" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
-          <SortHeader label="Last seen" column="last_seen" sort={processSort} onToggle={(key) => (processSort = toggleSort(processSort, key))} />
+          <SortHeader label="Process" column="process" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="PID" column="pid" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="User" column="user" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="Connections" column="connections" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="Bytes in" column="bytes_in" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="Bytes out" column="bytes_out" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="Path" column="path" sort={processSort} onToggle={toggleProcessSort} />
+          <SortHeader label="Last seen" column="last_seen" sort={processSort} onToggle={toggleProcessSort} />
         </tr>
       </thead>
       <tbody>
@@ -142,7 +166,8 @@
                           <SortHeader label="Domains" column="domains" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
                           <SortHeader label="Trust" column="trust" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
                           <SortHeader label="Flags" column="flags" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
-                          <SortHeader label="Traffic in/out" column="traffic" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
+                          <SortHeader label="Snort in/out" column="traffic" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
+                          <SortHeader label="Live in/out" column="traffic" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
                           <SortHeader label="Conns" column="connections" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
                           <SortHeader label="Last seen" column="last_seen" sort={processDestinationSort} onToggle={(key) => (processDestinationSort = toggleSort(processDestinationSort, key))} />
                         </tr>
@@ -154,12 +179,13 @@
                             <td>{domainLabel(destination.domains)}</td>
                             <td><span class="tag {destination.trust_state}">{destination.trust_state}</span></td>
                             <td>{destination.flags.length ? destination.flags.map(flagLabel).join(", ") : "-"}</td>
-                            <td class="mono">{formatBytes(destination.bytes_in)} / {formatBytes(destination.bytes_out)}</td>
+                            <td class="mono">{formatBytes(destination.snort_bytes_in)} / {formatBytes(destination.snort_bytes_out)}</td>
+                            <td class="mono">{formatBytes(destination.live_bytes_in)} / {formatBytes(destination.live_bytes_out)}</td>
                             <td>{destination.connection_count}</td>
                             <td class="mono">{formatTime(destination.last_seen)}</td>
                           </tr>
                         {:else}
-                          <tr><td class="empty" colspan="7">No attributed destinations for this process.</td></tr>
+                          <tr><td class="empty" colspan="8">No attributed destinations for this process. Process bytes come from nettop; no matching live flow or completed Snort connection was found.</td></tr>
                         {/each}
                       </tbody>
                     </table>

@@ -80,7 +80,7 @@ impl ExtractorRecord {
             ts: get_ts(&value)?,
             uid: get_str(&value, "uid"),
             pkt_num: get_u64(&value, "pkt_num"),
-            proto: get_str(&value, "proto"),
+            proto: get_str(&value, "proto").map(|proto| proto.to_ascii_lowercase()),
             client_ip: get_str(&value, "id.orig_h"),
             client_port: get_u16(&value, "id.orig_p"),
             server_ip: get_str(&value, "id.resp_h"),
@@ -246,6 +246,15 @@ mod tests {
         assert_eq!(event.common.ts, 1_750_000_000);
         assert_eq!(event.service.as_deref(), Some("ssl"));
         assert_eq!(event.bytes_ba, 2000);
+    }
+
+    #[test]
+    fn normalizes_uppercase_protocol() {
+        let line = r#"{"ts":1,"uid":"C1","id.orig_h":"10.0.0.5","id.orig_p":50000,"id.resp_h":"198.51.100.10","id.resp_p":443,"proto":"TCP","service":"ssl","conn_state":"SF","duration":1.0,"orig_pkts":2,"resp_pkts":3,"orig_bytes":100,"resp_bytes":200}"#;
+        let ExtractorRecord::Conn(event) = ExtractorRecord::parse(line).unwrap() else {
+            panic!("expected conn");
+        };
+        assert_eq!(event.common.proto.as_deref(), Some("tcp"));
     }
 
     #[test]

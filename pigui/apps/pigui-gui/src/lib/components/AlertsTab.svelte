@@ -7,13 +7,32 @@
     type SortColumns,
     type SortState,
   } from "../sort";
-  import type { AlertRecord } from "../types";
+  import type { AlertRecord, ListQueryState } from "../types";
   import SortHeader from "./SortHeader.svelte";
 
-  let { alerts }: { alerts: AlertRecord[] } = $props();
+  let {
+    alerts,
+    onQuery,
+  }: {
+    alerts: AlertRecord[];
+    onQuery?: (query: ListQueryState) => void;
+  } = $props();
 
   let filter = $state("");
   let alertSort = $state<SortState | null>(null);
+
+  function emitQuery() {
+    onQuery?.({
+      q: filter.trim() || undefined,
+      sort: alertSort?.key,
+      dir: alertSort?.direction,
+    });
+  }
+
+  function toggleAlertSort(key: string) {
+    alertSort = toggleSort(alertSort, key);
+    emitQuery();
+  }
 
   const alertColumns: SortColumns<AlertRecord> = {
     time: (alert) => alert.event_ts,
@@ -45,20 +64,20 @@
 <section class="panel fill">
   <div class="panel-header">
     <h2>Alerts</h2>
-    <input type="search" placeholder="Filter alerts" bind:value={filter} />
+    <input type="search" placeholder="Filter alerts" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>
       <thead>
         <tr>
-          <SortHeader label="Time" column="time" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="SID" column="sid" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="Priority" column="priority" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="Proto" column="proto" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="Source" column="source" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="Destination" column="destination" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="Action" column="action" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
-          <SortHeader label="Message" column="message" sort={alertSort} onToggle={(key) => (alertSort = toggleSort(alertSort, key))} />
+          <SortHeader label="Time" column="time" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="SID" column="sid" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="Priority" column="priority" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="Proto" column="proto" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="Source" column="source" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="Destination" column="destination" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="Action" column="action" sort={alertSort} onToggle={toggleAlertSort} />
+          <SortHeader label="Message" column="message" sort={alertSort} onToggle={toggleAlertSort} />
         </tr>
       </thead>
       <tbody>

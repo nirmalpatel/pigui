@@ -4,14 +4,16 @@ use std::time::UNIX_EPOCH;
 
 use pigui_core::error::{Error, Result};
 use pigui_core::rpc::{
-    AlertList, AlertsQuery, ConnectionList, DestinationList, DestinationQuery, DnsList, DomainList,
-    FlowList, HealthPayload, HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST,
+    AlertList, ConnectionList, DestinationList, DestinationQuery, DnsList, DomainList, FlowList,
+    HealthPayload, HttpList, ListQuery, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST,
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
     METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_HEALTH, METHOD_HTTP_LIST,
-    METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_QUIC_LIST, METHOD_SHUTDOWN,
-    METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST,
-    METHOD_WATCHED_REMOVE, ProcessList, ProcessQuery, QuicList, Request, Response, SetTrustRequest,
-    SnortStatusPayload, StatusPayload, TlsList, WatchedList, WatchedRequest,
+    METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
+    METHOD_PROCESSES_LIST, METHOD_QUIC_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET,
+    METHOD_SETTINGS_UPDATE, METHOD_SHUTDOWN, METHOD_SNORT_STATUS, METHOD_STATUS, METHOD_TLS_LIST,
+    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, MaintenanceStats, ProcessList,
+    ProcessQuery, QuicList, Request, Response, SetTrustRequest, SnortStatusPayload, StatusPayload,
+    TlsList, WatchedList, WatchedRequest,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -107,6 +109,11 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
         METHOD_TLS_LIST => list_tls(state, request.params),
         METHOD_HTTP_LIST => list_http(state, request.params),
         METHOD_QUIC_LIST => list_quic(state, request.params),
+        METHOD_SETTINGS_GET => settings_get(state),
+        METHOD_SETTINGS_UPDATE => settings_update(state, request.params),
+        METHOD_SETTINGS_RESET => settings_reset(state),
+        METHOD_MAINTENANCE_STATS => maintenance_stats(state),
+        METHOD_MAINTENANCE_PRUNE => maintenance_prune(state),
         METHOD_SHUTDOWN => {
             state.request_shutdown();
             Ok(Value::from(true))
@@ -229,19 +236,19 @@ fn snort_status(state: &AppState) -> Result<SnortStatusPayload> {
 }
 
 fn list_alerts(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (alerts, total) = query_store(state, |store| {
-        Ok((store.list_alerts(limit, offset)?, store.count_alerts()?))
+        Ok((store.list_alerts_query(&q)?, store.count_alerts_query(&q)?))
     })?;
     Ok(serde_json::to_value(AlertList { alerts, total })?)
 }
 
 fn list_destinations(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (destinations, total) = query_store(state, |store| {
         Ok((
-            store.list_destinations(limit, offset)?,
-            store.count_destinations()?,
+            store.list_destinations_query(&q)?,
+            store.count_destinations_query(&q)?,
         ))
     })?;
     Ok(serde_json::to_value(DestinationList {
@@ -265,9 +272,12 @@ fn process_detail(state: &AppState, params: Value) -> Result<Value> {
 }
 
 fn list_domains(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (domains, total) = query_store(state, |store| {
-        Ok((store.list_domains(limit, offset)?, store.count_domains()?))
+        Ok((
+            store.list_domains_query(&q)?,
+            store.count_domains_query(&q)?,
+        ))
     })?;
     Ok(serde_json::to_value(DomainList { domains, total })?)
 }
@@ -302,39 +312,39 @@ fn remove_watched_domain(state: &AppState, params: Value) -> Result<Value> {
 }
 
 fn list_flows(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (flows, total) = query_store(state, |store| {
-        Ok((store.list_flows(limit, offset)?, store.count_flows()?))
+        Ok((store.list_flows_query(&q)?, store.count_flows_query(&q)?))
     })?;
     Ok(serde_json::to_value(FlowList { flows, total })?)
 }
 
 fn list_processes(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (processes, total) = query_store(state, |store| {
         Ok((
-            store.list_processes(limit, offset)?,
-            store.count_processes()?,
+            store.list_processes_query(&q)?,
+            store.count_processes_query(&q)?,
         ))
     })?;
     Ok(serde_json::to_value(ProcessList { processes, total })?)
 }
 
 fn list_connections(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (connections, total) = query_store(state, |store| {
         Ok((
-            store.list_connections(limit, offset)?,
-            store.count_connections()?,
+            store.list_connections_query(&q)?,
+            store.count_connections_query(&q)?,
         ))
     })?;
     Ok(serde_json::to_value(ConnectionList { connections, total })?)
 }
 
 fn list_dns(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (observations, total) = query_store(state, |store| {
-        Ok((store.list_dns(limit, offset)?, store.count_dns()?))
+        Ok((store.list_dns_query(&q)?, store.count_dns_query(&q)?))
     })?;
     Ok(serde_json::to_value(DnsList {
         observations,
@@ -343,9 +353,9 @@ fn list_dns(state: &AppState, params: Value) -> Result<Value> {
 }
 
 fn list_tls(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (observations, total) = query_store(state, |store| {
-        Ok((store.list_tls(limit, offset)?, store.count_tls()?))
+        Ok((store.list_tls_query(&q)?, store.count_tls_query(&q)?))
     })?;
     Ok(serde_json::to_value(TlsList {
         observations,
@@ -354,9 +364,9 @@ fn list_tls(state: &AppState, params: Value) -> Result<Value> {
 }
 
 fn list_http(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (observations, total) = query_store(state, |store| {
-        Ok((store.list_http(limit, offset)?, store.count_http()?))
+        Ok((store.list_http_query(&q)?, store.count_http_query(&q)?))
     })?;
     Ok(serde_json::to_value(HttpList {
         observations,
@@ -365,9 +375,9 @@ fn list_http(state: &AppState, params: Value) -> Result<Value> {
 }
 
 fn list_quic(state: &AppState, params: Value) -> Result<Value> {
-    let (limit, offset) = query_limits(params);
+    let q = query_list(state, params);
     let (observations, total) = query_store(state, |store| {
-        Ok((store.list_quic(limit, offset)?, store.count_quic()?))
+        Ok((store.list_quic_query(&q)?, store.count_quic_query(&q)?))
     })?;
     Ok(serde_json::to_value(QuicList {
         observations,
@@ -375,12 +385,68 @@ fn list_quic(state: &AppState, params: Value) -> Result<Value> {
     })?)
 }
 
-fn query_limits(params: Value) -> (u32, u32) {
-    let query: AlertsQuery = serde_json::from_value(params).unwrap_or_default();
-    (
-        query.limit.unwrap_or(200).clamp(1, 1_000),
-        query.offset.unwrap_or(0),
-    )
+fn query_list(state: &AppState, params: Value) -> ListQuery {
+    let mut query: ListQuery = serde_json::from_value(params).unwrap_or_default();
+    let settings = state.settings();
+    query.limit = Some(
+        query
+            .limit
+            .unwrap_or(settings.ui.page_size)
+            .clamp(1, settings.limits.max_page_size),
+    );
+    query.offset = Some(query.offset.unwrap_or(0));
+    if let Some(search) = query.q.as_mut() {
+        *search = search.trim().to_string();
+        if search.is_empty() {
+            query.q = None;
+        }
+    }
+    query
+}
+
+fn settings_get(state: &AppState) -> Result<Value> {
+    Ok(serde_json::to_value(state.settings())?)
+}
+
+fn settings_update(state: &AppState, params: Value) -> Result<Value> {
+    let settings = query_store(state, |store| store.update_settings(&params))?;
+    state.set_settings(settings.clone());
+    Ok(serde_json::to_value(settings)?)
+}
+
+fn settings_reset(state: &AppState) -> Result<Value> {
+    let settings = query_store(state, |store| store.reset_settings())?;
+    state.set_settings(settings.clone());
+    Ok(serde_json::to_value(settings)?)
+}
+
+fn maintenance_stats(state: &AppState) -> Result<Value> {
+    let counts = query_store(state, |store| store.table_counts())?;
+    let db_path = state.config.db_path.display().to_string();
+    let mut db_bytes = std::fs::metadata(&state.config.db_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    for suffix in ["-wal", "-shm"] {
+        let path = format!("{}{suffix}", state.config.db_path.display());
+        db_bytes += std::fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+    }
+    let (last_run, last_deleted) = state.maintenance_info();
+    Ok(serde_json::to_value(MaintenanceStats {
+        db_path,
+        db_bytes,
+        table_counts: counts,
+        last_run,
+        last_deleted,
+    })?)
+}
+
+fn maintenance_prune(state: &AppState) -> Result<Value> {
+    let settings = state.settings();
+    let result = query_store(state, |store| store.prune(&settings))?;
+    state.record_maintenance(&result);
+    Ok(serde_json::to_value(result)?)
 }
 
 fn query_store<T>(state: &AppState, f: impl FnOnce(&Store) -> Result<T>) -> Result<T> {

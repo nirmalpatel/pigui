@@ -15,6 +15,7 @@
   } from "../sort";
   import type {
     DomainSummary,
+    ListQueryState,
     TrustState,
     WatchedDomain,
   } from "../types";
@@ -24,15 +25,30 @@
     domains,
     watchedDomains,
     onRefresh,
+    onQuery,
   }: {
     domains: DomainSummary[];
     watchedDomains: WatchedDomain[];
     onRefresh: () => Promise<void>;
+    onQuery?: (query: ListQueryState) => void;
   } = $props();
 
   let filter = $state("");
   let domainTrustFilter = $state("all");
   let domainSort = $state<SortState | null>(null);
+
+  function emitQuery() {
+    onQuery?.({
+      q: filter.trim() || undefined,
+      sort: domainSort?.key,
+      dir: domainSort?.direction,
+    });
+  }
+
+  function toggleDomainSort(key: string) {
+    domainSort = toggleSort(domainSort, key);
+    emitQuery();
+  }
   let watchedInput = $state("");
   let expandedHostnames = $state<Record<string, boolean>>({});
 
@@ -164,23 +180,23 @@
         <option value="suspicious">Suspicious</option>
         <option value="ignored">Ignored</option>
       </select>
-      <input type="search" placeholder="Filter domains" bind:value={filter} />
+      <input type="search" placeholder="Filter domains" bind:value={filter} oninput={emitQuery} />
     </div>
   </div>
   <div class="table-wrap tall">
     <table>
       <thead>
         <tr>
-          <SortHeader label="Registrable domain" column="domain" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Hostnames" column="hostnames" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Sources" column="sources" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Trust" column="trust" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Flags" column="flags" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="IPs" column="ips" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Processes" column="processes" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Observed" column="observed" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="First seen" column="first_seen" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
-          <SortHeader label="Last seen" column="last_seen" sort={domainSort} onToggle={(key) => (domainSort = toggleSort(domainSort, key))} />
+          <SortHeader label="Registrable domain" column="domain" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Hostnames" column="hostnames" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Sources" column="sources" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Trust" column="trust" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Flags" column="flags" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="IPs" column="ips" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Processes" column="processes" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Observed" column="observed" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="First seen" column="first_seen" sort={domainSort} onToggle={toggleDomainSort} />
+          <SortHeader label="Last seen" column="last_seen" sort={domainSort} onToggle={toggleDomainSort} />
           <th>Mark</th>
         </tr>
       </thead>

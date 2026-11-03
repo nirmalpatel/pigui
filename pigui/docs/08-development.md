@@ -27,8 +27,9 @@ npm run check      # svelte-check
 ```
 
 The Tauri app looks up `PIGUI_HOME` when set. In debug builds it defaults to the
-repository `pigui/` directory. In release it uses the Tauri app-data directory
-for GUI settings.
+repository `pigui/` directory. A packaged app uses
+`~/Library/Application Support/PIGUI`. All data and settings live in the daemon
+database; there is no separate GUI database.
 
 ## macOS packaging
 
@@ -130,7 +131,7 @@ there is no mode variable.
 | `PIGUI_EXTRACTOR_JSON` | `<log>/file_connector_pigui_transmit` | Extractor JSONL |
 | `PIGUI_SNORT_PIDFILE` | `<log>/snort.pid` | Snort PID file |
 | `PIGUI_SNORT_CONTROL_SOCKET` | `var/run/snort.sock` | Reserved for planned control client |
-| `PIGUI_PROCESS_POLL_MS` | `1000` | `nettop` poll interval; minimum 250 |
+| `PIGUI_PROCESS_POLL_MS` | `1000` | Bootstrap `nettop` poll interval; the Settings tab value takes precedence once stored |
 | `RUST_LOG` | `info` | Tracing filter |
 
 Relative paths are resolved against `PIGUI_HOME`.

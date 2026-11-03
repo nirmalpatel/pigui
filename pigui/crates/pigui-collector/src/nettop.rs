@@ -206,8 +206,8 @@ fn parse_connection(
         server_port,
         state,
         interface,
-        bytes_ab: bytes_in,
-        bytes_ba: bytes_out,
+        bytes_ab: bytes_out,
+        bytes_ba: bytes_in,
         pid,
         process_name,
     })
@@ -308,8 +308,8 @@ mod tests {
         assert_eq!(tcp.client_port, 60293);
         assert_eq!(tcp.server_ip, "17.242.13.5");
         assert_eq!(tcp.server_port, 5223);
-        assert_eq!(tcp.bytes_ab, 5525);
-        assert_eq!(tcp.bytes_ba, 20461);
+        assert_eq!(tcp.bytes_ab, 20461);
+        assert_eq!(tcp.bytes_ba, 5525);
         assert_eq!(tcp.pid, 348);
     }
 

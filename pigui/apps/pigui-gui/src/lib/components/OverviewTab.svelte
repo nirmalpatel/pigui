@@ -106,7 +106,7 @@
     </div>
     <div class="table-wrap short">
       <table>
-        <thead><tr><th>Process</th><th>PID</th><th>Conns</th><th>Traffic</th></tr></thead>
+        <thead><tr><th>Process</th><th>PID</th><th>Conns</th><th>nettop traffic</th></tr></thead>
         <tbody>
           {#each topProcesses as process (process.pid)}
             <tr>
@@ -129,7 +129,7 @@
     </div>
     <div class="table-wrap short">
       <table>
-        <thead><tr><th>Destination</th><th>Procs</th><th>Traffic</th></tr></thead>
+        <thead><tr><th>Destination</th><th>Procs</th><th>Snort / live traffic</th></tr></thead>
         <tbody>
           {#each topDestinations as destination (destination.ip)}
             <tr>
@@ -138,7 +138,7 @@
                 {#if destination.hostname}<div class="sub">{destination.hostname}</div>{/if}
               </td>
               <td>{destination.process_count}</td>
-              <td>{formatBytes(destination.bytes_in + destination.bytes_out)}</td>
+              <td class="mono">{formatBytes(destination.bytes_in + destination.bytes_out)} / {formatBytes(destination.live_bytes_in + destination.live_bytes_out)}</td>
             </tr>
           {:else}
             <tr><td class="empty" colspan="3">No destinations yet.</td></tr>

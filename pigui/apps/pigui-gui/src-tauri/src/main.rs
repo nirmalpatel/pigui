@@ -7,21 +7,17 @@ use std::time::{Duration, Instant};
 
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
+use pigui_core::helper;
 use pigui_core::rpc::{
     METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL,
     METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST,
-    METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_STATUS,
-    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
+    METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
+    METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
+    METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
 };
-use pigui_core::helper;
 use pigui_core::service::{self, ServiceAction};
-use pigui_core::settings::{AppSettings, ThemeMode};
+use pigui_core::settings::AppSettings;
 use serde_json::{Value, json};
-use tauri::Manager;
-
-mod settings;
-
-use settings::UiSettingsStore;
 
 fn prepare_home() {
     #[cfg(debug_assertions)]
@@ -128,25 +124,58 @@ fn client() -> Result<DaemonClient, String> {
     Ok(DaemonClient::new(&config.socket_path))
 }
 
-fn settings_db_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    if let Some(home) = std::env::var_os("PIGUI_HOME") {
-        return Ok(PathBuf::from(home).join("var/lib/pigui-gui.db"));
-    }
-    Ok(app.path().app_data_dir()?.join("settings.sqlite3"))
+fn list_params(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Value {
+    json!({
+        "limit": limit,
+        "offset": offset,
+        "q": q,
+        "sort": sort,
+        "dir": dir,
+    })
 }
 
 #[tauri::command]
-fn get_settings(store: tauri::State<'_, UiSettingsStore>) -> Result<AppSettings, String> {
-    store.get_settings()
+fn get_settings() -> Result<AppSettings, String> {
+    let value = client()?
+        .call(METHOD_SETTINGS_GET, json!({}))
+        .map_err(|error| error.to_string())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn update_settings(
-    theme: ThemeMode,
-    store: tauri::State<'_, UiSettingsStore>,
-) -> Result<AppSettings, String> {
-    store.set_theme(theme)?;
-    store.get_settings()
+fn update_settings(patch: Value) -> Result<AppSettings, String> {
+    let value = client()?
+        .call(METHOD_SETTINGS_UPDATE, patch)
+        .map_err(|error| error.to_string())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reset_settings() -> Result<AppSettings, String> {
+    let value = client()?
+        .call(METHOD_SETTINGS_RESET, json!({}))
+        .map_err(|error| error.to_string())?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn maintenance_stats() -> Result<Value, String> {
+    client()?
+        .call(METHOD_MAINTENANCE_STATS, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn prune_now() -> Result<Value, String> {
+    client()?
+        .call(METHOD_MAINTENANCE_PRUNE, json!({}))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -215,45 +244,75 @@ fn get_status() -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn list_alerts(limit: Option<u32>) -> Result<Value, String> {
+fn list_alerts(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
-        .call(METHOD_ALERTS_LIST, json!({ "limit": limit.unwrap_or(200) }))
+        .call(METHOD_ALERTS_LIST, list_params(limit, offset, q, sort, dir))
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn list_destinations(limit: Option<u32>) -> Result<Value, String> {
+fn list_destinations(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
         .call(
             METHOD_DESTINATIONS_LIST,
-            json!({ "limit": limit.unwrap_or(200) }),
+            list_params(limit, offset, q, sort, dir),
         )
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn list_flows(limit: Option<u32>) -> Result<Value, String> {
+fn list_flows(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
-        .call(METHOD_FLOWS_LIST, json!({ "limit": limit.unwrap_or(300) }))
+        .call(METHOD_FLOWS_LIST, list_params(limit, offset, q, sort, dir))
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn list_processes(limit: Option<u32>) -> Result<Value, String> {
+fn list_processes(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
         .call(
             METHOD_PROCESSES_LIST,
-            json!({ "limit": limit.unwrap_or(200) }),
+            list_params(limit, offset, q, sort, dir),
         )
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn list_connections(limit: Option<u32>) -> Result<Value, String> {
+fn list_connections(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
         .call(
             METHOD_CONNECTIONS_LIST,
-            json!({ "limit": limit.unwrap_or(200) }),
+            list_params(limit, offset, q, sort, dir),
         )
         .map_err(|error| error.to_string())
 }
@@ -273,19 +332,31 @@ fn process_detail(pid: u32) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn list_domains(limit: Option<u32>) -> Result<Value, String> {
+fn list_domains(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
         .call(
             METHOD_DOMAINS_LIST,
-            json!({ "limit": limit.unwrap_or(300) }),
+            list_params(limit, offset, q, sort, dir),
         )
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn list_dns(limit: Option<u32>) -> Result<Value, String> {
+fn list_dns(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    q: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+) -> Result<Value, String> {
     client()?
-        .call(METHOD_DNS_LIST, json!({ "limit": limit.unwrap_or(500) }))
+        .call(METHOD_DNS_LIST, list_params(limit, offset, q, sort, dir))
         .map_err(|error| error.to_string())
 }
 
@@ -336,9 +407,7 @@ fn main() {
             if let Err(error) = start_daemon_if_needed() {
                 eprintln!("could not start pigui-daemon: {error}");
             }
-            let path = settings_db_path(app)?;
-            let store = UiSettingsStore::open(&path).map_err(std::io::Error::other)?;
-            app.manage(store);
+            let _ = app;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -355,6 +424,9 @@ fn main() {
             get_status,
             get_settings,
             update_settings,
+            reset_settings,
+            maintenance_stats,
+            prune_now,
             list_alerts,
             list_destinations,
             destination_detail,

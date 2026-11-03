@@ -30,6 +30,7 @@
     { id: "dns", label: "DNS" },
     { id: "alerts", label: "Alerts" },
     { id: "capture", label: "Capture" },
+    { id: "settings", label: "Settings" },
   ];
 </script>
 

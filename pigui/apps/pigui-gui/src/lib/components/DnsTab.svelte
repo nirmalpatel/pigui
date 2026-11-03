@@ -7,13 +7,32 @@
     type SortColumns,
     type SortState,
   } from "../sort";
-  import type { DnsObservation } from "../types";
+  import type { DnsObservation, ListQueryState } from "../types";
   import SortHeader from "./SortHeader.svelte";
 
-  let { dnsObservations }: { dnsObservations: DnsObservation[] } = $props();
+  let {
+    dnsObservations,
+    onQuery,
+  }: {
+    dnsObservations: DnsObservation[];
+    onQuery?: (query: ListQueryState) => void;
+  } = $props();
 
   let filter = $state("");
   let dnsSort = $state<SortState | null>(null);
+
+  function emitQuery() {
+    onQuery?.({
+      q: filter.trim() || undefined,
+      sort: dnsSort?.key,
+      dir: dnsSort?.direction,
+    });
+  }
+
+  function toggleDnsSort(key: string) {
+    dnsSort = toggleSort(dnsSort, key);
+    emitQuery();
+  }
 
   const dnsColumns: SortColumns<DnsObservation> = {
     time: (observation) => observation.ts,
@@ -43,19 +62,19 @@
 <section class="panel fill">
   <div class="panel-header">
     <h2>DNS observations</h2>
-    <input type="search" placeholder="Filter DNS" bind:value={filter} />
+    <input type="search" placeholder="Filter DNS" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>
       <thead>
         <tr>
-          <SortHeader label="Time" column="time" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
-          <SortHeader label="Client" column="client" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
-          <SortHeader label="Query" column="query" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
-          <SortHeader label="Type" column="type" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
-          <SortHeader label="Rcode" column="rcode" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
-          <SortHeader label="Answers" column="answers" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
-          <SortHeader label="TTL" column="ttl" sort={dnsSort} onToggle={(key) => (dnsSort = toggleSort(dnsSort, key))} />
+          <SortHeader label="Time" column="time" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="Client" column="client" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="Query" column="query" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="Type" column="type" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="Rcode" column="rcode" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="Answers" column="answers" sort={dnsSort} onToggle={toggleDnsSort} />
+          <SortHeader label="TTL" column="ttl" sort={dnsSort} onToggle={toggleDnsSort} />
         </tr>
       </thead>
       <tbody>

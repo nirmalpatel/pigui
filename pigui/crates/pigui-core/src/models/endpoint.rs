@@ -12,6 +12,12 @@ pub struct Destination {
     pub bytes_out: u64,
     pub connection_count: u64,
     pub process_count: u64,
+    #[serde(default)]
+    pub live_bytes_in: u64,
+    #[serde(default)]
+    pub live_bytes_out: u64,
+    #[serde(default)]
+    pub live_connection_count: u64,
     pub alert_count: u64,
     pub reputation: i64,
     pub blocked: bool,

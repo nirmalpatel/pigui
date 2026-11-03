@@ -18,13 +18,33 @@
     Destination,
     DestinationDetail,
     DestinationProcess,
+    ListQueryState,
   } from "../types";
   import SortHeader from "./SortHeader.svelte";
 
-  let { destinations }: { destinations: Destination[] } = $props();
+  let {
+    destinations,
+    onQuery,
+  }: {
+    destinations: Destination[];
+    onQuery?: (query: ListQueryState) => void;
+  } = $props();
 
   let filter = $state("");
   let destinationSort = $state<SortState | null>(null);
+
+  function emitQuery() {
+    onQuery?.({
+      q: filter.trim() || undefined,
+      sort: destinationSort?.key,
+      dir: destinationSort?.direction,
+    });
+  }
+
+  function toggleDestinationSort(key: string) {
+    destinationSort = toggleSort(destinationSort, key);
+    emitQuery();
+  }
   let destinationProcessSort = $state<SortState | null>(null);
   let expandedDestination = $state<string | null>(null);
   let destinationDetail = $state<DestinationDetail | null>(null);
@@ -47,7 +67,11 @@
   const destinationProcessColumns: SortColumns<DestinationProcess> = {
     process: (process) => process.process_name,
     pid: (process) => process.pid,
-    traffic: (process) => process.bytes_in + process.bytes_out,
+    traffic: (process) =>
+      process.snort_bytes_in +
+      process.snort_bytes_out +
+      process.live_bytes_in +
+      process.live_bytes_out,
     connections: (process) => process.connection_count,
     last_seen: (process) => process.last_seen,
   };
@@ -98,24 +122,25 @@
 <section class="panel fill">
   <div class="panel-header">
     <h2>Destinations</h2>
-    <input type="search" placeholder="Filter destinations" bind:value={filter} />
+    <input type="search" placeholder="Filter destinations" bind:value={filter} oninput={emitQuery} />
   </div>
   <div class="table-wrap tall">
     <table>
       <thead>
         <tr>
           <th></th>
-          <SortHeader label="IP" column="ip" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Domains" column="domains" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Trust" column="trust" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Flags" column="flags" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Processes" column="processes" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Connections" column="connections" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Alerts" column="alerts" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Bytes in" column="bytes_in" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Bytes out" column="bytes_out" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="First seen" column="first_seen" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
-          <SortHeader label="Last seen" column="last_seen" sort={destinationSort} onToggle={(key) => (destinationSort = toggleSort(destinationSort, key))} />
+          <SortHeader label="IP" column="ip" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Domains" column="domains" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Trust" column="trust" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Flags" column="flags" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Processes" column="processes" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Connections" column="connections" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Alerts" column="alerts" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Snort in" column="bytes_in" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Snort out" column="bytes_out" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <th>Live in/out</th>
+          <SortHeader label="First seen" column="first_seen" sort={destinationSort} onToggle={toggleDestinationSort} />
+          <SortHeader label="Last seen" column="last_seen" sort={destinationSort} onToggle={toggleDestinationSort} />
         </tr>
       </thead>
       <tbody>
@@ -135,12 +160,13 @@
             <td>{destination.alert_count}</td>
             <td>{formatBytes(destination.bytes_in)}</td>
             <td>{formatBytes(destination.bytes_out)}</td>
+            <td class="mono">{formatBytes(destination.live_bytes_in)} / {formatBytes(destination.live_bytes_out)}</td>
             <td class="mono">{formatTime(destination.first_seen)}</td>
             <td class="mono">{formatTime(destination.last_seen)}</td>
           </tr>
           {#if expandedDestination === destination.ip}
             <tr class="detail-row">
-              <td colspan="12">
+              <td colspan="13">
                 <div class="detail-block">
                   <div class="detail-heading">Processes using this destination</div>
                   {#if destinationDetail}
@@ -149,7 +175,8 @@
                         <tr>
                           <SortHeader label="Process" column="process" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
                           <SortHeader label="PID" column="pid" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
-                          <SortHeader label="Traffic in/out" column="traffic" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
+                          <SortHeader label="Snort in/out" column="traffic" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
+                          <SortHeader label="Live in/out" column="traffic" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
                           <SortHeader label="Connections" column="connections" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
                           <SortHeader label="Last seen" column="last_seen" sort={destinationProcessSort} onToggle={(key) => (destinationProcessSort = toggleSort(destinationProcessSort, key))} />
                         </tr>
@@ -159,12 +186,13 @@
                           <tr>
                             <td>{process.process_name ?? "-"}</td>
                             <td class="mono">{process.pid ?? "-"}</td>
-                            <td class="mono">{formatBytes(process.bytes_in)} / {formatBytes(process.bytes_out)}</td>
+                            <td class="mono">{formatBytes(process.snort_bytes_in)} / {formatBytes(process.snort_bytes_out)}</td>
+                            <td class="mono">{formatBytes(process.live_bytes_in)} / {formatBytes(process.live_bytes_out)}</td>
                             <td>{process.connection_count}</td>
                             <td class="mono">{formatTime(process.last_seen)}</td>
                           </tr>
                         {:else}
-                          <tr><td class="empty" colspan="5">No process attribution for this destination.</td></tr>
+                          <tr><td class="empty" colspan="6">No process attribution for this destination.</td></tr>
                         {/each}
                       </tbody>
                     </table>
@@ -178,7 +206,7 @@
             </tr>
           {/if}
         {:else}
-          <tr><td class="empty" colspan="12">No destinations observed yet.</td></tr>
+          <tr><td class="empty" colspan="13">No destinations observed yet.</td></tr>
         {/each}
       </tbody>
     </table>

@@ -6,11 +6,13 @@
 
   let {
     status,
+    settings,
     lastUpdated,
     refreshing,
     onRefresh,
   }: {
     status: StatusPayload | null;
+    settings?: AppSettings | null;
     lastUpdated: string;
     refreshing: boolean;
     onRefresh: () => void;
@@ -66,11 +68,17 @@
   async function selectTheme(mode: ThemeMode) {
     themeMode = mode;
     try {
-      await invoke("update_settings", { theme: mode });
+      await invoke("update_settings", { patch: { theme: mode } });
     } catch (cause) {
       console.warn("Unable to persist theme setting", cause);
     }
   }
+
+  $effect(() => {
+    if (settings?.theme) {
+      themeMode = settings.theme;
+    }
+  });
 
   $effect(() => {
     applyTheme();

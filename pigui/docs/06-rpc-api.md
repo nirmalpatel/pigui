@@ -54,13 +54,26 @@ Failure:
 | `dns.list` | `{limit?, offset?}` | `DnsList` |
 | `tls.list` | `{limit?, offset?}` | `TlsList` |
 | `http.list` | `{limit?, offset?}` | `HttpList` |
-| `quic.list` | `{limit?, offset?}` | `QuicList` |
+| `quic.list` | `{limit?, offset?, q?, sort?, dir?}` | `QuicList` |
+| `settings.get` | `{}` | `AppSettings` |
+| `settings.update` | partial settings document | `AppSettings` |
+| `settings.reset` | `{}` | `AppSettings` |
+| `maintenance.stats` | `{}` | `MaintenanceStats` |
+| `maintenance.prune_now` | `{}` | `PruneResult` |
 | `shutdown` | `{}` | `true` |
 
-List limits default to 200 and are clamped to `1..=1000`. `offset` defaults to
-0. Alert, observation, flow, process, and connection lists are newest-first.
-Destinations are ordered by alert count, then last seen. Domains are ordered by
-last seen.
+List methods accept `{limit, offset, q, sort, dir}`. `limit` defaults to the
+stored page size and is clamped to the configured `limits.max_page_size` (1000
+by default). `offset` defaults to 0. `q` performs a server-side LIKE search over
+the view's text fields. `sort` is an allowlisted column key and `dir` is `asc`
+or `desc`. `total` is the number of rows matching the current query.
+
+Default ordering: alerts/DNS/TLS/HTTP/QUIC and completed connections are
+newest-first; flows by last seen; processes by last seen then traffic;
+destinations by alert count then last seen; domains by last seen.
+
+Settings are stored in `pigui.db` (`app_settings`) and the GUI reaches them only
+through this API.
 
 ## Shared payloads
 
@@ -191,6 +204,9 @@ size.
   "bytes_out": 100,
   "connection_count": 1,
   "process_count": 1,
+  "live_bytes_in": 200,
+  "live_bytes_out": 100,
+  "live_connection_count": 1,
   "alert_count": 2,
   "reputation": 0,
   "blocked": false,
@@ -222,9 +238,13 @@ size.
     {
       "pid": 42,
       "process_name": "Spotify",
-      "bytes_in": 200,
-      "bytes_out": 100,
-      "connection_count": 1,
+      "snort_bytes_in": 200,
+      "snort_bytes_out": 100,
+      "live_bytes_in": 200,
+      "live_bytes_out": 100,
+      "snort_connection_count": 1,
+      "live_connection_count": 1,
+      "connection_count": 2,
       "last_seen": 1750000100
     }
   ],
@@ -232,7 +252,10 @@ size.
 }
 ```
 
-The process list is ordered by total bytes; recent alerts are limited to 10.
+`bytes_in`/`bytes_out`/`connection_count` on a destination are Snort-completed
+values. `live_*` values come from current `nettop` flows. Keeping them separate
+avoids double counting. The process list is ordered by total bytes; recent
+alerts honour `ui.detail_alert_limit`.
 
 ### Flows and processes
 
@@ -277,7 +300,13 @@ The process list is ordered by total bytes; recent alerts are limited to 10.
 
 `processes.detail` with `{"pid":42}` returns `process` plus `destinations`.
 Each process destination has `ip`, `domains`, `trust_state`, `flags`,
-`bytes_in`, `bytes_out`, `connection_count`, and `last_seen`.
+`snort_bytes_in`, `snort_bytes_out`, `live_bytes_in`, `live_bytes_out`,
+`snort_connection_count`, `live_connection_count`, `connection_count`, and
+`last_seen`. The process row's own `bytes_in`/`bytes_out` are the last `nettop`
+snapshot, not Snort totals.
+
+Flow bytes use the same direction convention as connections: `bytes_ab` is
+client → server, `bytes_ba` is server → client.
 
 ### Connections
 
@@ -406,8 +435,8 @@ Errors are plain strings. Common cases:
 | `pigui-cli dns` / `tls` / `http` | `dns.list` / `tls.list` / `http.list` |
 | `pigui-cli snort status` | local PID-file status, not RPC |
 
-The GUI uses `status`, list methods, detail methods, trust, and watched-domain
-methods. It does not currently expose TLS/HTTP/QUIC lists.
+The GUI uses `status`, list methods, detail methods, trust, watched-domain, and
+settings/maintenance methods. It does not currently expose TLS/HTTP/QUIC lists.
 
 ## Current security gaps
 

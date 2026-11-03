@@ -65,8 +65,9 @@ On startup the daemon:
 |---|---|---|
 | Alert tailer | 500 ms | Polls the alert file, parses `alert_json`, inserts alerts |
 | Extractor tailer | 500 ms | Polls the extractor JSONL file, classifies and inserts records |
-| Process collector | `PIGUI_PROCESS_POLL_MS` (default 1000 ms, minimum 250 ms) | Runs `nettop`, enriches with `ps`, upserts processes and live flows |
-| Name resolver | ~30 s loop | Resolves PTR candidates and due watched domains |
+| Process collector | Settings `collector.poll_ms` (default 1000 ms, minimum 250 ms) | Runs `nettop`, enriches with `ps`, upserts processes and live flows |
+| Name resolver | Settings `resolver.loop_secs` (default 30 s) | Resolves PTR candidates and due watched domains |
+| Maintenance | Settings `maintenance.interval_secs` (default 300 s) | Prunes old rows using the configured retention limits |
 | RPC server | event-driven | Accepts newline-delimited JSON requests on the Unix socket |
 
 The collectors run on dedicated OS threads so the single-threaded async runtime
@@ -85,11 +86,10 @@ Path handling:
 
 ## Storage
 
-Default databases:
+Default database:
 
-- `var/lib/pigui.db` — dev and prod data.
-- `var/lib/pigui-gui.db` — GUI preferences, owned by the GUI process, not the
-  daemon.
+- `var/lib/pigui.db` — dev and prod data plus `app_settings`. The daemon is the
+  only process that opens it; the GUI uses RPC for settings and maintenance.
 
 The daemon sets `journal_mode = WAL`, `synchronous = NORMAL`, and
 `foreign_keys = ON`. See [03-data.md](03-data.md) for schema and retention
@@ -110,6 +110,10 @@ The full method list, payloads, and CLI/GUI mapping are in
 [06-rpc-api.md](06-rpc-api.md).
 
 ## Status and degraded modes
+
+Settings can be changed at runtime through `settings.get`, `settings.update`,
+and `settings.reset`. Collector, resolver, and maintenance loops read the
+shared settings snapshot each iteration, so changes apply without restart.
 
 The `status` response reports:
 
@@ -145,4 +149,4 @@ Tracing output goes to stdout with ANSI disabled when not a terminal. Set
 - No signal-based reload or stats dump.
 - No policy engine or rule bundle manager.
 - PF execution and capture-state persistence across helper restarts are pending.
-- No retention or log rotation job.
+- No log rotation job yet; database retention is implemented.

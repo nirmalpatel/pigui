@@ -26,6 +26,11 @@ pub const METHOD_TLS_LIST: &str = "tls.list";
 pub const METHOD_HTTP_LIST: &str = "http.list";
 pub const METHOD_QUIC_LIST: &str = "quic.list";
 pub const METHOD_SNORT_STATUS: &str = "snort.status";
+pub const METHOD_SETTINGS_GET: &str = "settings.get";
+pub const METHOD_SETTINGS_UPDATE: &str = "settings.update";
+pub const METHOD_SETTINGS_RESET: &str = "settings.reset";
+pub const METHOD_MAINTENANCE_STATS: &str = "maintenance.stats";
+pub const METHOD_MAINTENANCE_PRUNE: &str = "maintenance.prune_now";
 pub const METHOD_SHUTDOWN: &str = "shutdown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,20 +81,60 @@ impl Response {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AlertsQuery {
-    #[serde(default)]
-    pub limit: Option<u32>,
-    #[serde(default)]
-    pub offset: Option<u32>,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortDirection {
+    Asc,
+    #[default]
+    Desc,
+}
+
+impl SortDirection {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "ASC",
+            Self::Desc => "DESC",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DestinationsQuery {
+pub struct ListQuery {
     #[serde(default)]
     pub limit: Option<u32>,
     #[serde(default)]
     pub offset: Option<u32>,
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub dir: Option<SortDirection>,
+}
+
+pub type AlertsQuery = ListQuery;
+pub type DestinationsQuery = ListQuery;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TableCount {
+    pub name: String,
+    pub rows: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MaintenanceStats {
+    pub db_path: String,
+    pub db_bytes: u64,
+    pub table_counts: Vec<TableCount>,
+    pub last_run: Option<i64>,
+    pub last_deleted: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PruneResult {
+    pub ran_at: i64,
+    pub deleted: Vec<TableCount>,
+    pub total_deleted: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,8 +179,12 @@ pub struct ConnectionList {
 pub struct DestinationProcess {
     pub pid: Option<u32>,
     pub process_name: Option<String>,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
+    pub snort_bytes_in: u64,
+    pub snort_bytes_out: u64,
+    pub live_bytes_in: u64,
+    pub live_bytes_out: u64,
+    pub snort_connection_count: u64,
+    pub live_connection_count: u64,
     pub connection_count: u64,
     pub last_seen: i64,
 }
@@ -153,8 +202,12 @@ pub struct ProcessDestination {
     pub domains: Vec<EndpointDomain>,
     pub trust_state: TrustState,
     pub flags: Vec<ReviewFlag>,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
+    pub snort_bytes_in: u64,
+    pub snort_bytes_out: u64,
+    pub live_bytes_in: u64,
+    pub live_bytes_out: u64,
+    pub snort_connection_count: u64,
+    pub live_connection_count: u64,
     pub connection_count: u64,
     pub last_seen: i64,
 }

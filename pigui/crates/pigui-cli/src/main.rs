@@ -224,6 +224,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -238,6 +239,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -252,6 +254,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -266,6 +269,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -280,6 +284,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -294,6 +299,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -332,6 +338,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -346,6 +353,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {
@@ -360,6 +368,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_value(AlertsQuery {
                     limit: Some(limit),
                     offset: None,
+                    ..Default::default()
                 })?,
             )?;
             if json {

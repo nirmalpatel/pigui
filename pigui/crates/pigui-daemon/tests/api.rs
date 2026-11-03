@@ -10,8 +10,9 @@ use pigui_core::rpc::{
     AlertList, ConnectionList, DestinationDetail, DestinationList, DomainList, METHOD_ALERTS_LIST,
     METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST,
     METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_PROCESSES_DETAIL,
-    METHOD_PROCESSES_LIST, METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST,
-    METHOD_WATCHED_REMOVE, ProcessDetail, ProcessList, StatusPayload, WatchedList,
+    METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
+    METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
+    ProcessDetail, ProcessList, StatusPayload, WatchedList,
 };
 use pigui_daemon::api;
 use pigui_daemon::state::AppState;
@@ -135,6 +136,15 @@ async fn serves_status_alerts_and_destinations() {
     assert_eq!(alerts.total, 5);
     assert_eq!(alerts.alerts.len(), 5);
 
+    let page: AlertList = client
+        .call_typed(
+            METHOD_ALERTS_LIST,
+            json!({ "limit": 2, "offset": 1, "sort": "time", "dir": "asc" }),
+        )
+        .unwrap();
+    assert_eq!(page.total, 5);
+    assert_eq!(page.alerts.len(), 2);
+
     let destinations: DestinationList = client
         .call_typed(METHOD_DESTINATIONS_LIST, json!({ "limit": 10 }))
         .unwrap();
@@ -201,6 +211,19 @@ async fn serves_status_alerts_and_destinations() {
         .unwrap();
     let watched: WatchedList = client.call_typed(METHOD_WATCHED_LIST, json!({})).unwrap();
     assert!(watched.watched.is_empty());
+
+    let settings = client.call(METHOD_SETTINGS_GET, json!({})).unwrap();
+    assert_eq!(settings["theme"], "system");
+    let updated = client
+        .call(
+            METHOD_SETTINGS_UPDATE,
+            json!({ "theme": "dark", "ui": { "page_size": 50 } }),
+        )
+        .unwrap();
+    assert_eq!(updated["theme"], "dark");
+    assert_eq!(updated["ui"]["page_size"], 50);
+    let reset = client.call(METHOD_SETTINGS_RESET, json!({})).unwrap();
+    assert_eq!(reset["theme"], "system");
 
     client.call(METHOD_SHUTDOWN, json!({})).unwrap();
     tokio::time::timeout(Duration::from_secs(2), server)
