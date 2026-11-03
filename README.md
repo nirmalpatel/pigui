@@ -61,3 +61,5 @@ and at [snort3/snort3](https://github.com/snort3/snort3).
 ## License
 
 PIGUI is GPL-2.0-only, matching the Snort 3 repository it lives in.
+
+<a href="https://www.flaticon.com/free-icons/pig" title="pig icons">Pig icons created by mj - Flaticon</a>
