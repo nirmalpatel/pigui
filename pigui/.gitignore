@@ -27,3 +27,4 @@ AuthKey_*.p8
 *.key
 .notarytool/
 *.zip
+!crates/pigui-daemon/assets/*.csv.zip

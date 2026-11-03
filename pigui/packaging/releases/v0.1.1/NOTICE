@@ -34,4 +34,19 @@ Cargo.toml in the corresponding source tree. License texts for the upstream
 components are available from their respective projects and from the Snort 3
 source tree at the tag above.
 
+Bundled data
+------------
+
+This release bundles the Tranco top-1M domain list (list ID GQ38K-1m) as the
+default trusted-domain list.
+
+  Tranco                         https://tranco-list.eu/
+  Authors                        Victor Le Pochat, Tom Van Goethem,
+                                 Samaneh Tajalizadehkhoob, Maciej Korczynski,
+                                 and Wouter Joosen
+
+Tranco aggregates popularity data from third-party providers. See the Tranco
+attribution and methodology pages for the upstream data sources and their
+terms. The list is used only as local default trust data and is not modified.
+
 No warranty is provided. See the GNU General Public License for details.

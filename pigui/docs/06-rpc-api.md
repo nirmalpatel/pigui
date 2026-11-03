@@ -401,7 +401,9 @@ domain:
 ```
 
 Valid states: `unknown`, `trusted`, `suspicious`, `ignored`. Setting `unknown`
-deletes the trust row. The domain is normalized; a subdomain is reduced to its
+deletes the trust override, so a domain in the bundled Tranco default list
+returns to `trusted` and other domains return to `unknown`. The domain is
+normalized; a subdomain is reduced to its
 registrable domain.
 
 ### Watched domains

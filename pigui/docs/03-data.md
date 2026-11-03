@@ -126,6 +126,21 @@ domains:
 
 Valid TLS is not treated as trust.
 
+### Default trust
+
+PIGUI ships with the Tranco top-1M list (ID `GQ38K-1m`) compiled into the
+daemon. Its registrable domains default to `trusted` without writing anything
+to the database. Trust is resolved with this precedence:
+
+1. Explicit user override in `domain_trust`
+2. Bundled Tranco default → `trusted`
+3. Otherwise `unknown`
+
+The `domain_trust` table therefore stores only user overrides. Setting a domain
+back to `unknown` deletes the override and restores the bundled default. Updating
+the default list requires a new PIGUI release; there is no runtime download or
+import command.
+
 ### Domain source precedence
 
 `endpoint_domains` keeps one row per `(ip, domain)` and records the strongest
@@ -268,7 +283,8 @@ observation_count`
 `endpoint_domains`: `ip, domain, server_port, source, first_seen, last_seen,
 observation_count` with primary key `(ip, domain)`
 
-`domain_trust`: `registrable_domain, state, note, updated_at`
+`domain_trust`: user trust overrides, `registrable_domain, state, note,
+updated_at`. The bundled Tranco default trust is not stored in SQLite.
 
 `ptr_observations`: `ip, hostname, status, error, first_seen, last_seen,
 expires_at`

@@ -15,6 +15,7 @@ use pigui_core::rpc::{
     ProcessDestination, ProcessDetail, PruneResult, SortDirection, TableCount,
 };
 use pigui_core::settings::{AppSettings, ThemeMode};
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{
     Connection as SqlConnection, OpenFlags, OptionalExtension, params, params_from_iter,
     types::Value as SqlValue,
@@ -527,7 +528,7 @@ FROM endpoints e
 
 const SELECT_DOMAIN_BASE: &str = r#"
 SELECT d.registrable_domain,
-                        COALESCE(t.state, 'unknown'),
+                        COALESCE(t.state, default_domain_trust(d.registrable_domain), 'unknown'),
                         MIN(d.first_seen),
                         MAX(d.last_seen),
                         SUM(d.observation_count),
@@ -643,6 +644,7 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")
             .map_err(db)?;
         conn.pragma_update(None, "foreign_keys", "ON").map_err(db)?;
+        register_default_trust(&conn)?;
         let previous_version = read_schema_version(&conn)?;
         conn.execute_batch(SCHEMA).map_err(db)?;
         ensure_endpoints_hostname(&conn)?;
@@ -847,7 +849,8 @@ impl Store {
             .conn
             .prepare(
                 "SELECT ed.domain, d.registrable_domain, ed.source, ed.server_port,
-                        COALESCE(t.state, 'unknown'), ed.first_seen, ed.last_seen
+                        COALESCE(t.state, default_domain_trust(d.registrable_domain), 'unknown'),
+                        ed.first_seen, ed.last_seen
                  FROM endpoint_domains ed
                  JOIN domains d ON d.domain = ed.domain
                  LEFT JOIN domain_trust t ON t.registrable_domain = d.registrable_domain
@@ -878,7 +881,7 @@ impl Store {
             .conn
             .prepare(
                 "SELECT d.registrable_domain,
-                        COALESCE(t.state, 'unknown'),
+                        COALESCE(t.state, default_domain_trust(d.registrable_domain), 'unknown'),
                         MIN(d.first_seen),
                         MAX(d.last_seen),
                         SUM(d.observation_count),
@@ -1134,6 +1137,7 @@ impl Store {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(db)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn save_ptr_result(
         &self,
         ip: &str,
@@ -2050,7 +2054,10 @@ impl Store {
                 ("domain", "d.registrable_domain"),
                 ("hostnames", "COUNT(d.domain)"),
                 ("sources", "SUM(d.observation_count)"),
-                ("trust", "COALESCE(t.state, 'unknown')"),
+                (
+                    "trust",
+                    "COALESCE(t.state, default_domain_trust(d.registrable_domain), 'unknown')",
+                ),
                 ("flags", "SUM(d.observation_count)"),
                 ("ips", "COUNT(DISTINCT d.domain)"),
                 ("processes", "SUM(d.observation_count)"),
@@ -3163,6 +3170,21 @@ fn review_flags(
     flags
 }
 
+fn register_default_trust(conn: &SqlConnection) -> Result<()> {
+    conn.create_scalar_function(
+        "default_domain_trust",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let domain: String = context.get(0)?;
+            Ok(crate::trust_list::default_trust_state(&domain)
+                .map(|state| state.as_str().to_string()))
+        },
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
 fn db(error: rusqlite::Error) -> Error {
     Error::Database(error.to_string())
 }
@@ -3344,7 +3366,7 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let records = vec![
             extractor(
-                r#"{"ts":1000,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"example.com","version":"TLSv1.3","validation_status":"valid"}"#,
+                r#"{"ts":1000,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"unlisted-example.test","version":"TLSv1.3","validation_status":"valid"}"#,
             ),
             extractor(
                 r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"api.spotify.com","version":"TLSv1.3","validation_status":"valid"}"#,
@@ -3357,7 +3379,11 @@ mod tests {
 
         let domains = store.endpoint_domains("93.184.216.34").unwrap();
         assert_eq!(domains.len(), 2);
-        assert!(domains.iter().any(|domain| domain.domain == "example.com"));
+        assert!(
+            domains
+                .iter()
+                .any(|domain| domain.domain == "unlisted-example.test")
+        );
         assert!(
             domains
                 .iter()
@@ -3394,6 +3420,66 @@ mod tests {
     }
 
     #[test]
+    fn applies_bundled_default_trust_and_user_overrides() {
+        let mut store = Store::open_in_memory().unwrap();
+        let records = vec![
+            extractor(
+                r#"{"ts":1000,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"www.google.com","version":"TLSv1.3","validation_status":"valid"}"#,
+            ),
+            extractor(
+                r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"93.184.216.34","id.resp_p":443,"server_name":"unlisted-pigui-test.example","version":"TLSv1.3","validation_status":"valid"}"#,
+            ),
+        ];
+        store.insert_extractor_records(&records, 1001).unwrap();
+
+        let domains = store.endpoint_domains("93.184.216.34").unwrap();
+        assert_eq!(
+            domains
+                .iter()
+                .find(|domain| domain.registrable_domain == "google.com")
+                .unwrap()
+                .trust_state,
+            TrustState::Trusted
+        );
+        assert_eq!(
+            domains
+                .iter()
+                .find(|domain| domain.registrable_domain == "unlisted-pigui-test.example")
+                .unwrap()
+                .trust_state,
+            TrustState::Unknown
+        );
+
+        store
+            .set_domain_trust("google.com", TrustState::Suspicious, None)
+            .unwrap();
+        assert_eq!(
+            store
+                .endpoint_domains("93.184.216.34")
+                .unwrap()
+                .into_iter()
+                .find(|domain| domain.registrable_domain == "google.com")
+                .unwrap()
+                .trust_state,
+            TrustState::Suspicious
+        );
+
+        store
+            .set_domain_trust("google.com", TrustState::Unknown, None)
+            .unwrap();
+        assert_eq!(
+            store
+                .endpoint_domains("93.184.216.34")
+                .unwrap()
+                .into_iter()
+                .find(|domain| domain.registrable_domain == "google.com")
+                .unwrap()
+                .trust_state,
+            TrustState::Trusted
+        );
+    }
+
+    #[test]
     fn flags_invalid_tls_and_alerts() {
         let mut store = Store::open_in_memory().unwrap();
         store
@@ -3402,7 +3488,7 @@ mod tests {
         store
             .insert_extractor_records(
                 &[extractor(
-                    r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"odd.example.com","version":"TLSv1.2","validation_status":"invalid"}"#,
+                    r#"{"ts":1001,"id.orig_h":"10.0.0.5","id.resp_h":"198.51.100.10","id.resp_p":443,"server_name":"odd.unlisted-example.test","version":"TLSv1.2","validation_status":"invalid"}"#,
                 )],
                 1001,
             )
@@ -3422,7 +3508,7 @@ mod tests {
             .list_domains(10, 0)
             .unwrap()
             .into_iter()
-            .find(|domain| domain.domain == "example.com")
+            .find(|domain| domain.domain == "unlisted-example.test")
             .unwrap();
         assert!(domain.flags.contains(&ReviewFlag::Alerts));
         assert!(domain.flags.contains(&ReviewFlag::InvalidTls));
