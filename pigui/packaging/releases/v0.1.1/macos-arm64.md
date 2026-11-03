@@ -5,11 +5,11 @@
 ```text
 File:               PIGUI-0.1.1-macos-arm64.dmg
 Path:               target/macos/PIGUI-0.1.1-macos-arm64.dmg
-SHA-256:            5cd3e1988b7142842be45915fedb44b6707da549cb613587f071e3d9a03e0824
-Size:               37698448 bytes
+SHA-256:            d0ea508f14985d386f940bfee7372d93085665a1cd73f3e78ae1a16bf49f874c
+Size:               37705334 bytes
 Arch:               arm64
 Min macOS:          14.0
-App build commit:   c155d85d1
+App build commit:   809738575
 Release tag:        pigui-v0.1.1
 ```
 
@@ -18,15 +18,16 @@ and every nested Mach-O are signed with the Developer ID Application identity
 below.
 
 Earlier v0.1.1 builds were notarized but not published. They are superseded
-by this rebuild; only the artifact and hashes above are released.
+by this rebuild, which includes automatic capture startup, the simplified
+Capture tab, DNS trust display, clearer tab totals, and wrapping DNS answers.
 
 ## Signing and notarization
 
 ```text
 Team ID:                 HQ9NP5ZSL5
 Signing identity:        Developer ID Application: EDOPTIMIZE SOLUTIONS PRIVATE LIMITED (HQ9NP5ZSL5)
-App notary submission:   0922d8d7-8fe6-430c-aff3-daf26a9fa17a
-DMG notary submission:   6b16e888-556c-4e4a-a9a0-bdacc61fe52b
+App notary submission:   a6404b2e-a935-4896-bec2-c20580017840
+DMG notary submission:   ea5d84dc-62d9-4934-b528-ce0fd4f1185e
 App notary status:       Accepted
 DMG notary status:       Accepted
 App staple:              verified

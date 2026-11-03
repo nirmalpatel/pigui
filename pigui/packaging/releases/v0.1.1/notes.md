@@ -9,6 +9,17 @@ manager daemon, a privileged firewall helper, and an Activity Monitor-style GUI.
 
 ## What's changed
 
+- Capture now registers its services and starts automatically on launch. macOS
+  Login Items approval is the only manual setup step.
+- Simplified the Capture tab and moved manual controls and diagnostics under an
+  Advanced section.
+- DNS queries now show Tranco and user-override trust, including rows with no
+  query value.
+- Production startup now restarts a stale daemon when the app binary changes,
+  even if the version string is unchanged.
+- Tab headers show total database rows, and pagination clearly distinguishes
+  matching rows from total rows.
+- DNS answer values wrap instead of stretching the table.
 - Ships the Tranco top-1M list as the default trusted-domain list. User trust
   overrides still take precedence.
 - Refreshed the GUI with sortable tables and paginated views.
@@ -38,11 +49,10 @@ Apple, and stapled. Open the DMG and drag **PIGUI** into **Applications**.
 
 1. Open the DMG and drag `PIGUI.app` to `Applications`.
 2. Launch PIGUI from `/Applications`.
-3. Open the **Capture** tab.
-4. Click **Register helper**.
-5. Click **Open Login Items settings** and approve PIGUI.
-6. Click **Check again** until the helper shows `enabled`.
-7. Enter the capture interface, usually `en0`, and click **Enable capture**.
+3. If macOS asks, approve PIGUI in Login Items & Extensions.
+
+PIGUI registers its services, selects the default interface, and starts capture
+automatically. Manual controls are under **Capture → Advanced and diagnostics**.
 
 PIGUI never asks for a password. macOS owns the approval dialog, and the root
 helper never receives a credential.
@@ -59,7 +69,7 @@ spctl -a -vvv -t install PIGUI-0.1.1-macos-arm64.dmg
 SHA-256:
 
 ```text
-5cd3e1988b7142842be45915fedb44b6707da549cb613587f071e3d9a03e0824
+2c635338f2d9d0a47b7ebab6fc3afd20a62f4a618f776fc8ee0bf3ee3f8e99ed
 ```
 
 ## Known limitations
