@@ -11,10 +11,14 @@ use pigui_core::rpc::{
     METHOD_ALERTS_LIST, METHOD_CAPTURE_ENSURE, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START,
     METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
-    METHOD_DOMAINS_SET_TRUST, METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE,
-    METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL, METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET,
-    METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE, METHOD_SHUTDOWN, METHOD_STATUS,
-    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
+    METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_APPLY, METHOD_FIREWALL_BLOCKS_ADD,
+    METHOD_FIREWALL_BLOCKS_LIST, METHOD_FIREWALL_BLOCKS_REMOVE, METHOD_FIREWALL_COUNTERS,
+    METHOD_FIREWALL_ENABLE, METHOD_FIREWALL_EVENTS_LIST, METHOD_FIREWALL_RESET,
+    METHOD_FIREWALL_RULES_CREATE, METHOD_FIREWALL_RULES_DELETE, METHOD_FIREWALL_RULES_LIST,
+    METHOD_FIREWALL_RULES_REORDER, METHOD_FIREWALL_RULES_UPDATE, METHOD_FIREWALL_STATUS,
+    METHOD_FLOWS_LIST, METHOD_MAINTENANCE_PRUNE, METHOD_MAINTENANCE_STATS, METHOD_PROCESSES_DETAIL,
+    METHOD_PROCESSES_LIST, METHOD_SETTINGS_GET, METHOD_SETTINGS_RESET, METHOD_SETTINGS_UPDATE,
+    METHOD_SHUTDOWN, METHOD_STATUS, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
 };
 use pigui_core::service::{self, ServiceAction};
 use pigui_core::settings::AppSettings;
@@ -700,6 +704,125 @@ fn set_domain_trust(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn firewall_status() -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_STATUS, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_firewall_rules() -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_RULES_LIST, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_firewall_rule(rule: Value) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_RULES_CREATE, json!({ "rule": rule }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_firewall_rule(rule: Value) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_RULES_UPDATE, json!({ "rule": rule }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_firewall_rule(id: i64) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_RULES_DELETE, json!({ "id": id }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reorder_firewall_rules(ids: Vec<i64>) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_RULES_REORDER, json!({ "ids": ids }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn enable_firewall(enabled: bool) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_ENABLE, json!({ "enabled": enabled }))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_firewall() -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_APPLY, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reset_firewall() -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_RESET, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_firewall_blocks() -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_BLOCKS_LIST, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_firewall_block(
+    address: String,
+    direction: String,
+    ttl_secs: i64,
+    reason: Option<String>,
+) -> Result<Value, String> {
+    client()?
+        .call(
+            METHOD_FIREWALL_BLOCKS_ADD,
+            json!({
+                "address": address,
+                "direction": direction,
+                "ttl_secs": ttl_secs,
+                "reason": reason,
+                "source": "manual",
+            }),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_firewall_block(
+    id: Option<i64>,
+    address: Option<String>,
+    direction: Option<String>,
+) -> Result<Value, String> {
+    client()?
+        .call(
+            METHOD_FIREWALL_BLOCKS_REMOVE,
+            json!({ "id": id, "address": address, "direction": direction }),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn firewall_counters() -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_COUNTERS, json!({}))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_firewall_events(limit: Option<u32>) -> Result<Value, String> {
+    client()?
+        .call(METHOD_FIREWALL_EVENTS_LIST, json!({ "limit": limit }))
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     prepare_home();
 
@@ -744,7 +867,21 @@ fn main() {
             list_flows,
             list_processes,
             process_detail,
-            list_connections
+            list_connections,
+            firewall_status,
+            list_firewall_rules,
+            create_firewall_rule,
+            update_firewall_rule,
+            delete_firewall_rule,
+            reorder_firewall_rules,
+            enable_firewall,
+            apply_firewall,
+            reset_firewall,
+            list_firewall_blocks,
+            add_firewall_block,
+            remove_firewall_block,
+            firewall_counters,
+            list_firewall_events
         ])
         .run(tauri::generate_context!())
         .expect("error while running PIGUI");

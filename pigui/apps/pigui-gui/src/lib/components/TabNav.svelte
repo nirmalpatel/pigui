@@ -19,6 +19,7 @@
     { id: "domains", label: "Domains" },
     { id: "dns", label: "DNS" },
     { id: "alerts", label: "Alerts" },
+    { id: "firewall", label: "Firewall" },
     { id: "capture", label: "Capture" },
     { id: "settings", label: "Settings" },
   ];

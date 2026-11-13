@@ -550,8 +550,9 @@ Errors are plain strings. Common cases:
 | `pigui-cli firewall events` | `firewall.events.list` |
 | `pigui-cli snort status` | local PID-file status, not RPC |
 
-The GUI uses `status`, capture, list, detail, trust, watched-domain, and
-settings/maintenance methods. It does not currently expose TLS/HTTP/QUIC lists.
+The GUI uses `status`, capture, list, detail, trust, watched-domain, firewall,
+and settings/maintenance methods. It does not currently expose TLS/HTTP/QUIC
+lists.
 
 ## Current security gaps
 

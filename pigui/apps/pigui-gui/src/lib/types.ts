@@ -102,6 +102,117 @@ export interface CaptureStatusPayload {
   helper: unknown;
 }
 
+export type FirewallMode = "blocklist" | "policy";
+export type FirewallRuleAction = "allow" | "block" | "reject";
+export type FirewallDirection = "in" | "out" | "both";
+export type FirewallProtocol = "any" | "tcp" | "udp" | "icmp" | "icmp6";
+
+export interface FirewallRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  action: FirewallRuleAction;
+  direction: FirewallDirection;
+  protocol: FirewallProtocol;
+  local_address?: string | null;
+  local_port?: string | null;
+  remote_address?: string | null;
+  remote_port?: string | null;
+  interface?: string | null;
+  log: boolean;
+  priority: number;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface FirewallState {
+  enabled: boolean;
+  mode: FirewallMode;
+  generation: number;
+  applied_generation: number;
+  applied_at?: number | null;
+  last_error?: string | null;
+  pf_enabled_by_pigui: boolean;
+}
+
+export interface FirewallRuleList {
+  rules: FirewallRule[];
+  state: FirewallState;
+}
+
+export interface FirewallBlock {
+  id: number;
+  address: string;
+  direction: FirewallDirection;
+  ttl_secs: number;
+  reason?: string | null;
+  source: string;
+  created_at: number;
+  expires_at: number;
+}
+
+export interface FirewallBlockList {
+  blocks: FirewallBlock[];
+}
+
+export interface FirewallCounter {
+  anchor: string;
+  label: string;
+  evaluations: number;
+  packets: number;
+  bytes: number;
+  packets_in: number;
+  bytes_in: number;
+  packets_out: number;
+  bytes_out: number;
+}
+
+export interface FirewallEvent {
+  ts: number;
+  anchor: string;
+  rule_number: number;
+  rule_label?: string;
+  action: string;
+  direction: string;
+  interface?: string;
+  src?: string;
+  dst?: string;
+  src_port?: number;
+  dst_port?: number;
+  proto?: string;
+  raw?: string;
+}
+
+export interface FirewallHelperStatus {
+  ok?: boolean;
+  data?: {
+    pf_enabled?: boolean;
+    block_anchor?: string;
+    allow_anchor?: string;
+    block_anchor_loaded?: boolean;
+    allow_anchor_loaded?: boolean;
+    generation?: number;
+    pf_enabled_by_pigui?: boolean;
+    pflog_interface?: string;
+    pflog_ready?: boolean;
+    pflog_reader_running?: boolean;
+    pflog_created_by_pigui?: boolean;
+    block_rule_count?: number;
+    allow_rule_count?: number;
+    applied_at?: number;
+    last_error?: string;
+  };
+  error?: string;
+}
+
+export interface FirewallStatusPayload {
+  state: FirewallState;
+  rule_count: number;
+  block_count: number;
+  helper?: FirewallHelperStatus | null;
+  helper_error?: string | null;
+}
+
 export interface StatusPayload {
   capabilities: SnortCapabilities;
   db_path: string;
@@ -137,6 +248,11 @@ export interface StatusPayload {
   http_count: number;
   quic_count: number;
   domain_count: number;
+  firewall_enabled: boolean;
+  firewall_mode: FirewallMode;
+  firewall_rule_count: number;
+  firewall_block_count: number;
+  firewall_needs_apply: boolean;
   collector_error?: string;
 }
 
@@ -363,5 +479,6 @@ export type Tab =
   | "domains"
   | "dns"
   | "alerts"
+  | "firewall"
   | "capture"
   | "settings";

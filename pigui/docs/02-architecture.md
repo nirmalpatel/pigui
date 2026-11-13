@@ -181,8 +181,9 @@ Planned flow additions:
 
 The current helper implements capture lifecycle and PIGUI-owned PF anchor,
 table, and pflog actions. The daemon exposes firewall CRUD, apply, block, and
-telemetry RPC, and reconciles pending applies and expired blocks. Policy
-evaluation, GUI wiring, and rule bundles are still planned.
+telemetry RPC, and reconciles pending applies and expired blocks. The Tauri GUI
+has a Firewall tab. Policy evaluation, event history, and rule bundles are still
+planned.
 
 ## Boundaries to preserve
 

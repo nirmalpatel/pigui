@@ -7,6 +7,7 @@
   import DestinationsTab from "./lib/components/DestinationsTab.svelte";
   import DnsTab from "./lib/components/DnsTab.svelte";
   import DomainsTab from "./lib/components/DomainsTab.svelte";
+  import FirewallTab from "./lib/components/FirewallTab.svelte";
   import Header from "./lib/components/Header.svelte";
   import OverviewTab from "./lib/components/OverviewTab.svelte";
   import PaginationBar from "./lib/components/PaginationBar.svelte";
@@ -99,6 +100,7 @@
     domains: status?.domain_count ?? 0,
     dns: status?.dns_count ?? 0,
     alerts: status?.alert_count ?? 0,
+    firewall: status?.firewall_rule_count ?? 0,
   });
 
   const activePage = $derived.by(() => {
@@ -466,6 +468,8 @@
         <DnsTab {dnsObservations} onQuery={(query) => applyQuery("dns", query)} />
       {:else if tab === "alerts"}
         <AlertsTab {alerts} onQuery={(query) => applyQuery("alerts", query)} />
+      {:else if tab === "firewall"}
+        <FirewallTab onRefresh={refresh} />
       {:else if tab === "capture"}
         <CaptureTab {status} {autoCaptureError} onRefresh={refresh} />
       {:else if tab === "settings"}

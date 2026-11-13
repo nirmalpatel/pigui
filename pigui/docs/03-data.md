@@ -334,8 +334,8 @@ planned.
 action, rule_id, detail, result, error`). Helper actions are currently audited
 in `/Library/Logs/PIGUI/audit.log`.
 
-The compiler, storage, helper execution, daemon RPC, reconciliation, and TTL
-sweeping exist. Event persistence and the Firewall tab are planned.
+The compiler, storage, helper execution, daemon RPC, reconciliation, TTL
+sweeping, and the Firewall tab exist. Persisting helper pflog events is planned.
 
 ### Planned tables
 

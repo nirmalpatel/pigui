@@ -9,8 +9,8 @@ Activity Monitor-style GUI.
   ingestion, nettop process attribution, the daemon RPC API, the CLI, the Tauri
   shell, macOS app packaging, a narrow SMAppService/XPC helper, firewall rule
   storage/compilation, helper-side PF execution, daemon firewall RPC and
-  reconciliation, and a signed/notarized DMG workflow exist. GUI firewall wiring
-  and rule bundles are planned.
+  reconciliation, a Firewall tab, and a signed/notarized DMG workflow exist.
+  Event history and rule bundles are planned.
 - Target platforms: macOS (currently supported); Linux and Windows (in progress).
 - Project directory: `pigui/`
 - Parent Snort tree: not modified by PIGUI and not part of PIGUI's build.

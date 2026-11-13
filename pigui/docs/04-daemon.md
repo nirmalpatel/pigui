@@ -150,7 +150,7 @@ Tracing output goes to stdout with ANSI disabled when not a terminal. Set
 - No control-socket client; Snort is managed by process/PID file.
 - No signal-based reload or stats dump.
 - No policy engine or rule bundle manager.
-- PF helper execution, daemon firewall RPC, reconciliation, and TTL sweeping
-  exist; GUI wiring is still pending. Capture state is persisted and recovered
-  across daemon/helper restarts.
+- PF helper execution, daemon firewall RPC, reconciliation, TTL sweeping, and
+  the Firewall tab exist; event history is still pending. Capture state is
+  persisted and recovered across daemon/helper restarts.
 - No log rotation job yet; database retention is implemented.

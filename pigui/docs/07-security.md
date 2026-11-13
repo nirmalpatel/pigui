@@ -99,7 +99,7 @@ Requirements:
 - Rule changes and firewall actions are always audited. Privileged helper
   actions are audited now; rule changes are planned.
 - Enforcement is off by default and uses a PIGUI-owned PF anchor. Implemented in
-  the helper and daemon RPC; GUI wiring is planned.
+  the helper, daemon RPC, and Firewall tab.
 - Distribution builds are signed and notarized. Planned; packaging supports it.
 - Helper installation uses SMAppService, not ad-hoc privilege escalation.
   Implemented.
@@ -174,8 +174,8 @@ validation, and a PF rule compiler. The daemon stores firewall rules, dynamic
 blocks, state, events, and audit records. The root helper can validate, apply
 rules to PIGUI-owned PF anchors, add/remove dynamic table entries, read label
 counters, and collect recent pflog events. Daemon RPC, reconciliation, and TTL
-sweeping exist; UI wiring, event persistence, and the remaining enforcement
-safety controls are still planned.
+sweeping, and the Firewall tab exist; event persistence and the remaining
+enforcement safety controls are still planned.
 
 macOS implementation:
 
