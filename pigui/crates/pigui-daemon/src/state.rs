@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use pigui_core::Config;
@@ -13,7 +13,7 @@ use crate::store::{IngestStats, Store};
 #[derive(Debug)]
 pub struct AppState {
     pub config: Config,
-    pub store: Mutex<Store>,
+    pub store: Arc<Mutex<Store>>,
     pub firewall_lock: AsyncMutex<()>,
     pub capabilities: SnortCapabilities,
     pub started_at: Instant,
@@ -37,7 +37,7 @@ impl AppState {
         let capture = store.get_capture_state().unwrap_or_default();
         Self {
             config,
-            store: Mutex::new(store),
+            store: Arc::new(Mutex::new(store)),
             firewall_lock: AsyncMutex::new(()),
             capabilities,
             started_at: Instant::now(),

@@ -65,6 +65,8 @@ Failure:
 | `settings.reset` | `{}` | `AppSettings` |
 | `maintenance.stats` | `{}` | `MaintenanceStats` |
 | `maintenance.prune_now` | `{}` | `PruneResult` |
+| `analysis.overview` | `AnalysisQuery` | `AnalysisOverview` |
+| `analysis.findings` | `AnalysisQuery` | `AnalysisFindings` |
 | `firewall.status` | `{}` | `FirewallStatusPayload` |
 | `firewall.rules.list` | `{}` | `FirewallRuleList` |
 | `firewall.rules.create` | `{rule}` | `FirewallRule` |
@@ -93,6 +95,50 @@ destinations by alert count then last seen; domains by last seen.
 
 Settings are stored in `pigui.db` (`app_settings`) and the GUI reaches them only
 through this API.
+
+## Analysis methods
+
+`analysis.overview` and `analysis.findings` are read-only aggregation methods
+used by `pigui-mcp` and `pigui-cli analyze`. They never mutate capture,
+settings, trust, watchlists, maintenance data, or firewall state.
+
+`AnalysisQuery`:
+
+```json
+{
+  "since": 1750000000,
+  "until": 1750086400,
+  "limit": 20,
+  "min_severity": "medium",
+  "include_noise": false,
+  "baseline": false
+}
+```
+
+- `since` defaults to 24 hours before `until`; `until` defaults to now.
+- The window is capped at 30 days and reports `window.clamped`.
+- `limit` defaults to 20 and is clamped to `1..=100`.
+- `min_severity` accepts `info`, `low`, `medium`, `high`, or `critical`.
+- `include_noise` controls multicast, broadcast, loopback, link-local, and noisy
+  SID `116:444` suppression.
+- `baseline` compares `analysis.overview` with the immediately preceding
+  equal-length window; findings remain window-based.
+
+`analysis.overview` returns `window`, `coverage`, `totals`,
+`top_processes`, `top_destinations`, `top_domains`, `alert_breakdown`,
+`protocol_ports`, `trust_breakdown`, `new_domains`, `noise`, and an optional
+`baseline`. Windowed byte counts come from timestamped connections; endpoint
+and process lifetime counters are labeled separately. Coverage includes capture
+and Snort state, table counts, retention, and limitations.
+
+`analysis.findings` returns `window`, `findings`, `suppressed_noise`, and
+`limitations`. Each finding includes an ID, category, severity, confidence,
+title, summary, raw evidence, optional process/destination/domain references,
+first/last seen timestamps, and suggested read-only tools. Findings are
+heuristic leads, not verdicts.
+
+The MCP allowlist deliberately excludes `capture.status` because its handler can
+clear stale capture state.
 
 ## Shared payloads
 

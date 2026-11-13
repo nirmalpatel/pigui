@@ -29,6 +29,7 @@ Activity Monitor-style GUI.
 | [07-security.md](07-security.md) | Trust boundaries, IPC, audit, rules, and firewall safety |
 | [08-development.md](08-development.md) | Build, test, fixtures, environment reference, troubleshooting |
 | [09-roadmap.md](09-roadmap.md) | Milestones, risks, decisions, platform status, license |
+| [10-mcp.md](10-mcp.md) | Read-only MCP analysis interface, tools, security, privacy |
 
 ## Status legend
 

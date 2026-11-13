@@ -26,6 +26,8 @@ use rusqlite::{
 };
 use serde::Serialize;
 
+mod analysis;
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,

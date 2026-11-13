@@ -1,21 +1,24 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use pigui_core::client::DaemonClient;
 use pigui_core::config::Config;
 use pigui_core::helper;
+use pigui_core::models::analysis::AnalysisQuery;
 use pigui_core::paths::resolve_snort;
 use pigui_core::rpc::{
     AlertList, AlertsQuery, ConnectionList, DestinationList, DnsList, DomainList, FlowList,
-    HttpList, METHOD_ALERTS_LIST, METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST,
-    METHOD_DNS_LIST, METHOD_DOMAINS_LIST, METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_APPLY,
-    METHOD_FIREWALL_BLOCKS_ADD, METHOD_FIREWALL_BLOCKS_LIST, METHOD_FIREWALL_BLOCKS_REMOVE,
-    METHOD_FIREWALL_COUNTERS, METHOD_FIREWALL_ENABLE, METHOD_FIREWALL_EVENTS_LIST,
-    METHOD_FIREWALL_RESET, METHOD_FIREWALL_RULES_CREATE, METHOD_FIREWALL_RULES_DELETE,
-    METHOD_FIREWALL_RULES_LIST, METHOD_FIREWALL_RULES_REORDER, METHOD_FIREWALL_RULES_UPDATE,
-    METHOD_FIREWALL_STATUS, METHOD_FLOWS_LIST, METHOD_HTTP_LIST, METHOD_PROCESSES_LIST,
-    METHOD_STATUS, METHOD_TLS_LIST, METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE,
-    ProcessList, StatusPayload, TlsList, WatchedList,
+    HttpList, METHOD_ALERTS_LIST, METHOD_ANALYSIS_FINDINGS, METHOD_ANALYSIS_OVERVIEW,
+    METHOD_CONNECTIONS_LIST, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
+    METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_APPLY, METHOD_FIREWALL_BLOCKS_ADD,
+    METHOD_FIREWALL_BLOCKS_LIST, METHOD_FIREWALL_BLOCKS_REMOVE, METHOD_FIREWALL_COUNTERS,
+    METHOD_FIREWALL_ENABLE, METHOD_FIREWALL_EVENTS_LIST, METHOD_FIREWALL_RESET,
+    METHOD_FIREWALL_RULES_CREATE, METHOD_FIREWALL_RULES_DELETE, METHOD_FIREWALL_RULES_LIST,
+    METHOD_FIREWALL_RULES_REORDER, METHOD_FIREWALL_RULES_UPDATE, METHOD_FIREWALL_STATUS,
+    METHOD_FLOWS_LIST, METHOD_HTTP_LIST, METHOD_PROCESSES_LIST, METHOD_STATUS, METHOD_TLS_LIST,
+    METHOD_WATCHED_ADD, METHOD_WATCHED_LIST, METHOD_WATCHED_REMOVE, ProcessList, StatusPayload,
+    TlsList, WatchedList,
 };
 use pigui_core::service::{self, ServiceAction};
 use pigui_daemon::ingest;
@@ -123,6 +126,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run read-only analysis queries.
+    Analyze {
+        #[command(subcommand)]
+        command: AnalyzeCommand,
+    },
     /// Ingest an alert_json file directly into SQLite.
     Ingest {
         #[arg(long)]
@@ -145,6 +153,51 @@ enum Command {
         #[command(subcommand)]
         command: HelperCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AnalyzeCommand {
+    /// Time-windowed traffic aggregates and coverage.
+    Overview(AnalysisArgs),
+    /// Evidence-based intruder-hunt findings.
+    Findings {
+        #[command(flatten)]
+        analysis: AnalysisArgs,
+        #[arg(long)]
+        min_severity: Option<String>,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+struct AnalysisArgs {
+    /// Unix seconds. Defaults to 24 hours before until.
+    #[arg(long)]
+    since: Option<i64>,
+    /// Unix seconds. Defaults to now.
+    #[arg(long)]
+    until: Option<i64>,
+    /// Maximum rows. Defaults to 20 and is capped by the daemon.
+    #[arg(long)]
+    limit: Option<u32>,
+    /// Include multicast/broadcast/loopback/noisy-SID evidence.
+    #[arg(long)]
+    include_noise: bool,
+    /// Compare with the immediately preceding equal-length window.
+    #[arg(long)]
+    baseline: bool,
+}
+
+impl AnalysisArgs {
+    fn query(&self, min_severity: Option<String>) -> AnalysisQuery {
+        AnalysisQuery {
+            since: self.since,
+            until: self.until,
+            limit: self.limit,
+            min_severity,
+            include_noise: Some(self.include_noise),
+            baseline: Some(self.baseline),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -479,6 +532,18 @@ fn main() -> anyhow::Result<()> {
             } else {
                 print_http(&list);
             }
+        }
+        Command::Analyze { command } => {
+            let client = DaemonClient::with_timeout(&config.socket_path, Duration::from_secs(30));
+            let (method, query) = match command {
+                AnalyzeCommand::Overview(args) => (METHOD_ANALYSIS_OVERVIEW, args.query(None)),
+                AnalyzeCommand::Findings {
+                    analysis,
+                    min_severity,
+                } => (METHOD_ANALYSIS_FINDINGS, analysis.query(min_severity)),
+            };
+            let result = client.call(method, serde_json::to_value(query)?)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Command::Ingest { file, db } => {
             if let Some(db) = db {

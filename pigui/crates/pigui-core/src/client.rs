@@ -18,9 +18,13 @@ pub struct DaemonClient {
 
 impl DaemonClient {
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+        Self::with_timeout(socket_path, Duration::from_secs(5))
+    }
+
+    pub fn with_timeout(socket_path: impl Into<PathBuf>, timeout: Duration) -> Self {
         Self {
             socket_path: socket_path.into(),
-            timeout: Duration::from_secs(5),
+            timeout,
         }
     }
 

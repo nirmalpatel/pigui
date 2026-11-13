@@ -8,6 +8,7 @@ members = [
     "crates/pigui-daemon",
     "crates/pigui-helper",
     "crates/pigui-cli",
+    "crates/pigui-mcp",
 ]
 
 [workspace.package]
@@ -18,6 +19,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1"
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 dns-lookup = "4"
 dotenvy = "0.15"

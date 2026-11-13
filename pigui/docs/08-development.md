@@ -14,6 +14,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
+MCP development:
+
+```bash
+cargo build -p pigui-mcp
+cargo test -p pigui-mcp
+./scripts/run-mcp.sh          # starts the stdio server; stdout is MCP frames only
+./target/debug/pigui-cli analyze overview --limit 20
+./target/debug/pigui-cli analyze findings --limit 20 --min-severity medium
+```
+
+Restart OpenCode after changing the repository-root `opencode.json`. See
+[MCP](10-mcp.md) for tool, security, and configuration details.
+
 ## GUI commands
 
 From `pigui/apps/pigui-gui/`:

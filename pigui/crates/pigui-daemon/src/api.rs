@@ -4,11 +4,15 @@ use std::time::UNIX_EPOCH;
 
 use pigui_core::bundle;
 use pigui_core::error::{Error, Result};
+use pigui_core::models::analysis::{
+    AnalysisCoverage, AnalysisQuery, AnalysisTableCount, CaptureCoverage, RetentionWindow,
+};
 use pigui_core::rpc::{
     AlertList, CaptureStartRequest, CaptureState, CaptureStatusPayload, ConnectionList,
     DestinationList, DestinationQuery, DnsList, DomainList, FlowList, HealthPayload, HttpList,
-    ListQuery, METHOD_ALERTS_LIST, METHOD_CAPTURE_ENSURE, METHOD_CAPTURE_HELPER_STATUS,
-    METHOD_CAPTURE_START, METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
+    ListQuery, METHOD_ALERTS_LIST, METHOD_ANALYSIS_FINDINGS, METHOD_ANALYSIS_OVERVIEW,
+    METHOD_CAPTURE_ENSURE, METHOD_CAPTURE_HELPER_STATUS, METHOD_CAPTURE_START,
+    METHOD_CAPTURE_STATUS, METHOD_CAPTURE_STOP, METHOD_CONNECTIONS_LIST,
     METHOD_DESTINATIONS_DETAIL, METHOD_DESTINATIONS_LIST, METHOD_DNS_LIST, METHOD_DOMAINS_LIST,
     METHOD_DOMAINS_SET_TRUST, METHOD_FIREWALL_APPLY, METHOD_FIREWALL_BLOCKS_ADD,
     METHOD_FIREWALL_BLOCKS_LIST, METHOD_FIREWALL_BLOCKS_REMOVE, METHOD_FIREWALL_COUNTERS,
@@ -99,6 +103,8 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
     let result = match request.method.as_str() {
         METHOD_STATUS => status(state).and_then(|payload| Ok(serde_json::to_value(payload)?)),
         METHOD_HEALTH => health(state).and_then(|payload| Ok(serde_json::to_value(payload)?)),
+        METHOD_ANALYSIS_OVERVIEW => analysis_overview(state, request.params).await,
+        METHOD_ANALYSIS_FINDINGS => analysis_findings(state, request.params).await,
         METHOD_SNORT_STATUS => {
             snort_status(state).and_then(|payload| Ok(serde_json::to_value(payload)?))
         }
@@ -660,6 +666,94 @@ fn maintenance_prune(state: &AppState) -> Result<Value> {
     let result = query_store(state, |store| store.prune(&settings))?;
     state.record_maintenance(&result);
     Ok(serde_json::to_value(result)?)
+}
+
+async fn analysis_overview(state: &AppState, params: Value) -> Result<Value> {
+    let query: AnalysisQuery = if params.is_null() {
+        AnalysisQuery::default()
+    } else {
+        serde_json::from_value(params)?
+    };
+    let coverage = analysis_coverage(state)?;
+    let store = state.store.clone();
+    let payload = tokio::task::spawn_blocking(move || {
+        let store = store
+            .lock()
+            .map_err(|_| Error::Database("store lock poisoned".into()))?;
+        store.analysis_overview(&query, coverage)
+    })
+    .await
+    .map_err(|error| Error::Rpc(format!("analysis task failed: {error}")))??;
+    Ok(serde_json::to_value(payload)?)
+}
+
+async fn analysis_findings(state: &AppState, params: Value) -> Result<Value> {
+    let query: AnalysisQuery = if params.is_null() {
+        AnalysisQuery::default()
+    } else {
+        serde_json::from_value(params)?
+    };
+    let coverage = analysis_coverage(state)?;
+    let store = state.store.clone();
+    let limitations = coverage.limitations;
+    let payload = tokio::task::spawn_blocking(move || {
+        let store = store
+            .lock()
+            .map_err(|_| Error::Database("store lock poisoned".into()))?;
+        store.analysis_findings(&query, limitations)
+    })
+    .await
+    .map_err(|error| Error::Rpc(format!("analysis task failed: {error}")))??;
+    Ok(serde_json::to_value(payload)?)
+}
+
+fn analysis_coverage(state: &AppState) -> Result<AnalysisCoverage> {
+    let settings = state.settings();
+    let capture = state.capture();
+    let snort = pigui_snort::status::status(&state.config);
+    let alerts_ingested = state
+        .alerts_ingested
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let extractor_ingested = state
+        .extractor_ingested
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let extractor_idle = alerts_ingested > 0 && extractor_ingested == 0 && state.uptime_secs() > 30;
+    let table_counts = query_store(state, |store| store.table_counts())?
+        .into_iter()
+        .map(|count| AnalysisTableCount {
+            name: count.name,
+            rows: count.rows,
+        })
+        .collect();
+    Ok(AnalysisCoverage {
+        environment: state.config.environment.clone(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        capture: capture.as_ref().map(|capture| CaptureCoverage {
+            running: true,
+            interface: Some(capture.interface.clone()),
+            mode: Some(capture.mode.clone()),
+        }),
+        snort_running: snort.running,
+        snort_pid: snort.pid,
+        uptime_secs: state.uptime_secs(),
+        parse_errors: state
+            .parse_errors
+            .load(std::sync::atomic::Ordering::Relaxed),
+        extractor_idle,
+        collector_error: state.collector_error(),
+        table_counts,
+        retention: RetentionWindow {
+            flows_secs: settings.retention.flows_secs,
+            processes_secs: settings.retention.processes_secs,
+            alerts_days: settings.retention.alerts_days,
+            connections_days: settings.retention.connections_days,
+            observations_days: settings.retention.observations_days,
+            domains_days: settings.retention.domains_days,
+            endpoints_days: settings.retention.endpoints_days,
+            ptr_days: settings.retention.ptr_days,
+        },
+        limitations: Vec::new(),
+    })
 }
 
 fn query_store<T>(state: &AppState, f: impl FnOnce(&Store) -> Result<T>) -> Result<T> {

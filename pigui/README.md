@@ -32,6 +32,7 @@ Full documentation lives in [`docs/`](docs/README.md).
 | [Security](docs/07-security.md) | Trust boundaries, IPC, audit, enforcement |
 | [Development](docs/08-development.md) | Build, test, env vars, troubleshooting |
 | [Roadmap](docs/09-roadmap.md) | Milestones, risks, decisions |
+| [MCP](docs/10-mcp.md) | Read-only analysis tools for OpenCode and other MCP clients |
 
 ## Quick start
 

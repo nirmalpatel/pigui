@@ -17,5 +17,7 @@ Read `PIGUI.md` first: it summarizes this branch and links the full design in
 - Dev Snort binary: `../build/src/snort`; override with `PIGUI_SNORT_BIN`.
   Defaults live in `pigui/.env.example`.
 - Keep runtime/state under `pigui/var/`; never write into the parent tree.
+- MCP development: `cargo build -p pigui-mcp`, `cargo test -p pigui-mcp`, or
+  `./scripts/run-mcp.sh`. See `pigui/docs/10-mcp.md`.
 - Do not add PIGUI to the root CMake build.
 - Do not install Snort system-wide during development.

@@ -16,7 +16,8 @@ domains.
 
 The GUI never calls `pfctl`, Snort, or the helper directly. The daemon owns
 normalization, policy, and capture control. The helper owns privileged actions.
-The daemon itself is unprivileged.
+The daemon itself is unprivileged. `pigui-mcp` is an unprivileged stdio client
+of the daemon and has no database, Snort-file, shell, or helper access.
 
 Development and production now use the same control path: GUI -> daemon ->
 helper -> Snort. Development uses a temporary root LaunchDaemon and the same
@@ -60,6 +61,7 @@ notarized LaunchDaemon. Neither path asks PIGUI for a password.
 | `pigui-daemon` | Ingestion, correlation, SQLite store, RPC server, background tasks |
 | `pigui-helper` | Placeholder crate; the packaged helper is Swift under `packaging/macos/helper` |
 | `pigui-cli` | Headless management, diagnostics, test fixture ingestion |
+| `pigui-mcp` | Read-only MCP analysis server over the daemon Unix socket |
 | `pigui-gui` | Tauri Rust commands and Svelte frontend |
 
 Dependency direction is one-way: `pigui-core` is the base, `pigui-snort` and
@@ -94,7 +96,8 @@ pigui/
 │   ├── pigui-firewall/
 │   ├── pigui-daemon/
 │   ├── pigui-helper/
-│   └── pigui-cli/
+│   ├── pigui-cli/
+│   └── pigui-mcp/
 ├── docs/
 ├── packaging/
 │   └── macos/                  # app bundle, Snort bundling, helper, signing

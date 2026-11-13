@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "pigui": {
+        "type": "local",
+        "command": ["bash", "scripts/run-mcp.sh"],
+        "cwd": "pigui",
+        "environment": {
+          "PIGUI_MCP_REDACT_USERS": "1",
+          "PIGUI_MCP_MAX_ROWS": "200",
+          "PIGUI_MCP_MAX_BYTES": "65536",
+          "RUST_LOG": "warn"
+        }
+      }
+    }
+  }
+}

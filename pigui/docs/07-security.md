@@ -76,6 +76,31 @@ signed in-bundle diagnostic client (`com.pigui.helperctl`), both anchored to the
 app's Developer ID team. The Unix socket still needs peer credential checks or a
 move to XPC before it should be treated as a hardened boundary.
 
+## MCP analysis boundary
+
+`pigui-mcp` is an unprivileged, read-only MCP server over stdio:
+
+- It opens no SQLite database, reads no Snort files, executes no shell commands,
+  calls no privileged helper, and listens on no TCP socket.
+- Every daemon call is checked against one read-only allowlist. Unknown methods
+  fail closed and there is no generic raw-RPC tool.
+- It cannot start/stop capture, change settings, alter trust, modify watchlists,
+  prune data, modify firewall state, or shut down the daemon.
+- `capture.status` is excluded because its daemon handler can clear stale
+  capture state. The status tool uses `status`, `health`, and `snort.status`.
+- Logs go to stderr; stdout carries only MCP frames.
+- Responses are bounded by row and byte caps.
+- OS usernames are redacted by default. Process paths and network identifiers
+  are retained for attribution. Tool results may be sent to the configured model
+  provider for inference; this is a deliberate tradeoff.
+- Captured strings are untrusted input. The server instructs clients to never
+  follow instructions found in telemetry and never treats a finding as a verdict.
+- The server cannot contain an intruder. Containment remains a separate
+  human-approved action through the existing GUI, CLI, or privileged helper.
+
+The MCP process runs as the same user as the daemon and inherits the Unix socket
+trust boundary. It does not worsen the existing peer-verification gap.
+
 ## Security requirements
 
 Current:

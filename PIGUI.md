@@ -11,6 +11,7 @@ Activity Monitor-style GUI.
 - Full design and architecture: `pigui/docs/README.md`
 - The development app runs Snort, the daemon, and the Tauri GUI together via
   `scripts/run-dev.sh`
+- Read-only MCP analysis interface for OpenCode: `pigui/docs/10-mcp.md`
 - Automated tests use recorded fixtures under `tests/fixtures/`
 
 PIGUI does not link against Snort C++ internals and is not part of the
