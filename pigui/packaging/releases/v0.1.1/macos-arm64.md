@@ -5,29 +5,30 @@
 ```text
 File:               PIGUI-0.1.1-macos-arm64.dmg
 Path:               target/macos/PIGUI-0.1.1-macos-arm64.dmg
-SHA-256:            d0ea508f14985d386f940bfee7372d93085665a1cd73f3e78ae1a16bf49f874c
-Size:               37705334 bytes
+SHA-256:            92f47fd91ee305105322f95fc130adc760d6f42aed1dbfc74e24494214f96f42
+Size:               40013174 bytes
 Arch:               arm64
 Min macOS:          14.0
-App build commit:   809738575
+App build commit:   0c9b64dc4
 Release tag:        pigui-v0.1.1
 ```
 
 The DMG contains the signed, notarized, and stapled `PIGUI.app`. The app bundle
 and every nested Mach-O are signed with the Developer ID Application identity
-below.
+below. The bundle includes `pigui-mcp`, the read-only MCP analysis server, and
+`pigui-helper`, which provides the PF-backed firewall integration.
 
 Earlier v0.1.1 builds were notarized but not published. They are superseded
-by this rebuild, which includes automatic capture startup, the simplified
-Capture tab, DNS trust display, clearer tab totals, and wrapping DNS answers.
+by this rebuild, which adds the MCP analysis server, firewall integration and
+Firewall tab, analysis RPC methods, and updated documentation.
 
 ## Signing and notarization
 
 ```text
 Team ID:                 HQ9NP5ZSL5
 Signing identity:        Developer ID Application: EDOPTIMIZE SOLUTIONS PRIVATE LIMITED (HQ9NP5ZSL5)
-App notary submission:   a6404b2e-a935-4896-bec2-c20580017840
-DMG notary submission:   ea5d84dc-62d9-4934-b528-ce0fd4f1185e
+App notary submission:   5fe9e3ce-7c50-4d97-82bf-55fd0514213b
+DMG notary submission:   cfa6839c-6aaf-4b7a-9caa-faaf7adaf340
 App notary status:       Accepted
 DMG notary status:       Accepted
 App staple:              verified
@@ -40,6 +41,8 @@ Both the app and the DMG are notarized and stapled. The app-level ticket is
 required for launchd to accept the `SMAppService` LaunchDaemon. The helper
 accepts the signed daemon and the signed in-bundle diagnostic client
 (`com.pigui.helperctl`) through the app's `PIGUIHelperClientRequirement`.
+The bundled MCP server is signed as `com.pigui.mcp` and communicates only with
+the unprivileged daemon socket.
 
 ## Build environment
 

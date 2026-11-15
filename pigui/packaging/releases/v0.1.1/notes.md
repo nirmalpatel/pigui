@@ -9,6 +9,17 @@ manager daemon, a privileged firewall helper, and an Activity Monitor-style GUI.
 
 ## What's changed
 
+- Added a read-only MCP analysis server (`pigui-mcp`) for OpenCode and other MCP
+  clients. The binary is bundled in the app and exposes daemon telemetry such as
+  status, overview, findings, alerts, flows, processes, connections, domains,
+  DNS, TLS, HTTP, QUIC, watched domains, maintenance, and firewall state.
+- Added `analysis.overview` and `analysis.findings` daemon RPC methods for
+  windowed aggregates, evidence-based findings, noise suppression, and baseline
+  comparison.
+- Added PF-based firewall integration with compiled block and allow rules,
+  dynamic blocks, a Firewall tab with a rule editor, CLI diagnostics, helper
+  endpoints, and firewall audit records.
+- Added the application icon and in-app icon treatment.
 - Capture now registers its services and starts automatically on launch. macOS
   Login Items approval is the only manual setup step.
 - Simplified the Capture tab and moved manual controls and diagnostics under an
@@ -25,17 +36,17 @@ manager daemon, a privileged firewall helper, and an Activity Monitor-style GUI.
 - Refreshed the GUI with sortable tables and paginated views.
 - Added a Settings page and streamlined development/production configuration
   parity.
-- Added the application icon and in-app icon treatment.
 - Fixed the privileged helper to report the installed application version.
 - Detects and repairs stale background services after an app update.
 - Updated application terminology and vocabulary throughout the UI and docs.
 - Expanded daemon storage, ingestion, RPC, and settings handling.
-- Updated development, architecture, data, and RPC documentation.
+- Updated development, architecture, data, firewall, MCP, and RPC documentation.
 
 ## Requirements
 
 - macOS 14 or newer
 - Apple silicon (`arm64`)
+- Optional: an MCP client such as OpenCode for the read-only analysis interface
 
 ## Download
 
@@ -57,6 +68,33 @@ automatically. Manual controls are under **Capture → Advanced and diagnostics*
 PIGUI never asks for a password. macOS owns the approval dialog, and the root
 helper never receives a credential.
 
+## MCP analysis (optional)
+
+The app bundle includes the read-only MCP server at:
+
+```text
+/Applications/PIGUI.app/Contents/MacOS/pigui-mcp
+```
+
+Point your MCP client at that path. OpenCode example:
+
+```json
+{
+  "mcp": {
+    "pigui": {
+      "type": "local",
+      "command": ["/Applications/PIGUI.app/Contents/MacOS/pigui-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+PIGUI must be running and capture must be started before telemetry results are
+available. The MCP server is unprivileged and cannot start or stop capture,
+change settings, modify trust, alter firewall state, or prune data. See
+`docs/10-mcp.md` in the source tree for tools, limits, and privacy details.
+
 ## Verify the download
 
 From the directory containing the DMG and `SHA256SUMS`:
@@ -69,13 +107,16 @@ spctl -a -vvv -t install PIGUI-0.1.1-macos-arm64.dmg
 SHA-256:
 
 ```text
-2c635338f2d9d0a47b7ebab6fc3afd20a62f4a618f776fc8ee0bf3ee3f8e99ed
+92f47fd91ee305105322f95fc130adc760d6f42aed1dbfc74e24494214f96f42
 ```
 
 ## Known limitations
 
 - This is an early implementation; interfaces and behavior may change.
 - macOS arm64 only. Linux and Windows support is in progress.
+- MCP analysis sends network metadata to the configured model provider. OS
+  usernames are redacted by default; process paths and network identifiers are
+  preserved for attribution.
 - Passive capture only sees this machine's traffic.
 - HTTPS hostnames come from DNS/SNI, not payload decryption.
 - Process attribution and short-lived flow attribution are best-effort.

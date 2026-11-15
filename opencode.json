@@ -7,6 +7,20 @@
         "command": ["bash", "scripts/run-mcp.sh"],
         "cwd": "pigui",
         "environment": {
+          "PIGUI_SOCKET": "/Users/nirmal/Library/Application Support/PIGUI/var/run/pigui-daemon.sock",
+          "PIGUI_MCP_REDACT_USERS": "1",
+          "PIGUI_MCP_MAX_ROWS": "200",
+          "PIGUI_MCP_MAX_BYTES": "65536",
+          "RUST_LOG": "warn"
+        }
+      },
+      "pigui_dev": {
+        "type": "local",
+        "command": ["bash", "scripts/run-mcp.sh"],
+        "cwd": "pigui",
+        "environment": {
+          "PIGUI_HOME": ".",
+          "PIGUI_SOCKET": "./var/run/pigui-daemon.sock",
           "PIGUI_MCP_REDACT_USERS": "1",
           "PIGUI_MCP_MAX_ROWS": "200",
           "PIGUI_MCP_MAX_BYTES": "65536",

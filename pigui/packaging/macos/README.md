@@ -109,6 +109,21 @@ helper; a DMG-only ticket is not enough for `SMAppService`.
 Release artifacts and their metadata live under `releases/`. Do not commit the
 DMG itself.
 
+## MCP server
+
+The app bundle ships the read-only MCP server for OpenCode and other MCP
+clients. Point the client at the installed binary:
+
+```text
+/Applications/PIGUI.app/Contents/MacOS/pigui-mcp
+```
+
+The server resolves the production PIGUI home and daemon socket automatically
+when run from inside the app bundle. See
+[`../../docs/10-mcp.md`](../../docs/10-mcp.md) for client configuration, tools,
+and privacy details. It is unprivileged and cannot start or stop capture,
+change settings, or modify firewall state.
+
 ## Upgrades and service reconciliation
 
 Replacing `PIGUI.app` does not automatically stop processes that are already
@@ -255,6 +270,7 @@ new releases from [`../releases/TEMPLATE/`](../releases/TEMPLATE/).
 - `Contents/MacOS/PIGUI` - Tauri shell
 - `Contents/MacOS/pigui-daemon` - unprivileged manager
 - `Contents/MacOS/pigui-cli` - headless client
+- `Contents/MacOS/pigui-mcp` - read-only MCP analysis server
 - `Contents/MacOS/pigui-helper` - root XPC helper
 - `Contents/MacOS/pigui-servicectl` - SMAppService registration utility
 - `Contents/MacOS/snort` - bundled Snort 3

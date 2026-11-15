@@ -39,6 +39,33 @@ clear stale capture state. The `status` tool uses `status`, `health`, and
 
 ## Setup
 
+The packaged PIGUI app includes the MCP server at:
+
+```text
+/Applications/PIGUI.app/Contents/MacOS/pigui-mcp
+```
+
+Point your MCP client at that path. OpenCode example:
+
+```json
+{
+  "mcp": {
+    "pigui": {
+      "type": "local",
+      "command": ["/Applications/PIGUI.app/Contents/MacOS/pigui-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+When launched from inside the app bundle, `pigui-mcp` resolves the production
+home (`~/Library/Application Support/PIGUI`) and connects to the daemon socket
+automatically. PIGUI must be running and capture must be started for results to
+be available.
+
+For development from the repository:
+
 ```bash
 cd pigui
 cargo build -p pigui-mcp

@@ -18,6 +18,7 @@ for path in \
   "$CONTENTS/MacOS/$GUI_EXECUTABLE" \
   "$CONTENTS/MacOS/pigui-daemon" \
   "$CONTENTS/MacOS/pigui-cli" \
+  "$CONTENTS/MacOS/pigui-mcp" \
   "$CONTENTS/MacOS/pigui-helper" \
   "$CONTENTS/MacOS/pigui-servicectl" \
   "$CONTENTS/MacOS/pigui-helperctl" \

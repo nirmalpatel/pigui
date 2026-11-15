@@ -58,6 +58,10 @@ The unsigned build is written to `target/macos/PIGUI.app`. Set
 `PIGUI_NOTARIZE=1` for a signed and notarized DMG. See
 [`packaging/macos/README.md`](../packaging/macos/README.md).
 
+The packaged app includes the read-only MCP server at
+`Contents/MacOS/pigui-mcp`; point MCP clients at that path. See
+[MCP](10-mcp.md) for configuration.
+
 The packaged app includes `pigui-servicectl`, used by `pigui-cli service` and
 the GUI to register services through `SMAppService`:
 

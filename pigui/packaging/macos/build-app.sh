@@ -30,7 +30,7 @@ if [ ! -d "$SNORT_LUA" ]; then
 fi
 
 echo "building PIGUI Rust binaries"
-cargo build --release -p pigui-daemon -p pigui-cli --manifest-path "$PIGUI_ROOT/Cargo.toml"
+cargo build --release -p pigui-daemon -p pigui-cli -p pigui-mcp --manifest-path "$PIGUI_ROOT/Cargo.toml"
 
 TAURI_APP="$PIGUI_ROOT/apps/pigui-gui/src-tauri/target/release/bundle/macos/PIGUI.app"
 if [ "${PIGUI_SKIP_GUI:-0}" = "1" ]; then
@@ -53,6 +53,7 @@ cp -R "$TAURI_APP" "$APP_DIR"
 echo "assembling app binaries"
 install -m 0755 "$PIGUI_ROOT/target/release/pigui-daemon" "$APP_DIR/Contents/MacOS/pigui-daemon"
 install -m 0755 "$PIGUI_ROOT/target/release/pigui-cli" "$APP_DIR/Contents/MacOS/pigui-cli"
+install -m 0755 "$PIGUI_ROOT/target/release/pigui-mcp" "$APP_DIR/Contents/MacOS/pigui-mcp"
 "$SCRIPT_DIR/build-helper.sh" "$APP_DIR"
 xcrun swiftc \
   -O \
@@ -127,6 +128,7 @@ if [ -z "${PIGUI_SIGN_IDENTITY:-}" ]; then
   codesign --force --sign - --identifier "com.pigui.app" "$APP_DIR/Contents/MacOS/$GUI_EXECUTABLE" >/dev/null 2>&1 || true
   codesign --force --sign - --identifier "com.pigui.daemon" "$APP_DIR/Contents/MacOS/pigui-daemon" >/dev/null 2>&1 || true
   codesign --force --sign - --identifier "com.pigui.cli" "$APP_DIR/Contents/MacOS/pigui-cli" >/dev/null 2>&1 || true
+  codesign --force --sign - --identifier "com.pigui.mcp" "$APP_DIR/Contents/MacOS/pigui-mcp" >/dev/null 2>&1 || true
   codesign --force --sign - --identifier "com.pigui.helper" "$APP_DIR/Contents/MacOS/pigui-helper" >/dev/null 2>&1 || true
   codesign --force --sign - --identifier "com.pigui.servicectl" "$APP_DIR/Contents/MacOS/pigui-servicectl" >/dev/null 2>&1 || true
   codesign --force --sign - --identifier "com.pigui.helperctl" "$APP_DIR/Contents/MacOS/pigui-helperctl" >/dev/null 2>&1 || true

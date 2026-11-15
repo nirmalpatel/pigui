@@ -33,6 +33,7 @@ sign "$CONTENTS/MacOS/snort" \
   --entitlements "$SCRIPT_DIR/entitlements/snort.entitlements"
 sign "$CONTENTS/MacOS/pigui-daemon" --identifier "com.pigui.daemon"
 sign "$CONTENTS/MacOS/pigui-cli" --identifier "com.pigui.cli"
+sign "$CONTENTS/MacOS/pigui-mcp" --identifier "com.pigui.mcp"
 sign "$CONTENTS/MacOS/pigui-servicectl" --identifier "com.pigui.servicectl"
 sign "$CONTENTS/MacOS/pigui-helperctl" --identifier "com.pigui.helperctl"
 sign "$CONTENTS/MacOS/pigui-helper" --identifier "com.pigui.helper"
