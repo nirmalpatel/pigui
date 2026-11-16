@@ -100,8 +100,9 @@ stop_all() {
 cleanup() {
   trap - EXIT
   set +e
+  stop_capture
+  stop_daemon
   if [ -n "$DAEMON_PID" ]; then
-    stop_capture
     kill -TERM "$DAEMON_PID" 2>/dev/null
     wait "$DAEMON_PID" 2>/dev/null
   fi
@@ -198,15 +199,23 @@ sudo -v
 
 stop_all
 
-IFACE="${PIGUI_SNORT_INTERFACE:-}"
-if [ -z "$IFACE" ]; then
-  IFACE="$(route -n get default 2>/dev/null | sed -n 's/^ *interface: *//p' | head -1)"
-fi
+ENV_IFACE="${PIGUI_SNORT_INTERFACE:-}"
+ROUTE_IFACE="$(route -n get default 2>/dev/null | sed -n 's/^ *interface: *//p' | head -1)"
+IFACE="${ENV_IFACE:-$ROUTE_IFACE}"
 if [ -z "$IFACE" ]; then
   echo "could not determine capture interface; set PIGUI_SNORT_INTERFACE" >&2
   exit 1
 fi
-export PIGUI_SNORT_INTERFACE="$IFACE"
+if [ -n "$ENV_IFACE" ] && [ -n "$ROUTE_IFACE" ] && [ "$ENV_IFACE" != "$ROUTE_IFACE" ]; then
+  echo "warning: capturing $ENV_IFACE while the default route is $ROUTE_IFACE; VPN/tunnel traffic may be missed" >&2
+fi
+if [ -n "$ENV_IFACE" ]; then
+  echo "capture interface: $IFACE (source: PIGUI_SNORT_INTERFACE, pinned)"
+  export PIGUI_SNORT_INTERFACE="$IFACE"
+else
+  echo "capture interface: $IFACE (source: default route, auto-follow)"
+  unset PIGUI_SNORT_INTERFACE
+fi
 
 SNORT_BIN="${PIGUI_SNORT_BIN:-../build/src/snort}"
 case "$SNORT_BIN" in
@@ -240,9 +249,13 @@ if ! sudo launchctl print "system/$HELPER_LABEL" >/dev/null 2>&1; then
 fi
 
 echo "starting pigui-daemon"
+DEV_DAEMON_LOG="var/log/dev-daemon.log"
+if [ -f "$DEV_DAEMON_LOG" ] && [ "$(wc -c < "$DEV_DAEMON_LOG")" -gt 10485760 ]; then
+  mv -f "$DEV_DAEMON_LOG" "$DEV_DAEMON_LOG.1"
+fi
 PIGUI_HELPER_DEV=1 \
 PIGUI_HELPER_SERVICE="$HELPER_LABEL" \
-  ./target/debug/pigui-daemon > var/log/dev-daemon.log 2>&1 &
+  ./target/debug/pigui-daemon > "$DEV_DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 
 for _ in $(seq 1 100); do

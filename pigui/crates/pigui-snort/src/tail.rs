@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 use pigui_core::error::{Error, Result};
 
+const MAX_READ_BYTES_PER_POLL: usize = 4 * 1024 * 1024;
+const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
+
 /// Simple polling tailer for newline-delimited files.
 ///
 /// It tolerates partial lines, truncation, and rotation (inode changes). No
@@ -32,7 +35,7 @@ impl Tailer {
         let path = path.into();
         let mut tailer = Self::new(path);
         if let Ok(meta) = fs::metadata(&tailer.path) {
-            tailer.offset = meta.len();
+            tailer.offset = tail_offset(&tailer.path, meta.len()).unwrap_or(meta.len());
             tailer.inode = Some(meta.ino());
         }
         Ok(tailer)
@@ -60,7 +63,9 @@ impl Tailer {
             self.inode = Some(inode);
         }
 
-        if meta.len() == self.offset {
+        let remaining = meta.len().saturating_sub(self.offset);
+        let to_read = remaining.min(MAX_READ_BYTES_PER_POLL as u64) as usize;
+        if to_read == 0 {
             return Ok(Vec::new());
         }
 
@@ -68,8 +73,9 @@ impl Tailer {
         file.seek(SeekFrom::Start(self.offset))
             .map_err(|e| Error::io(&self.path, e))?;
 
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
+        let mut bytes = Vec::with_capacity(to_read.min(64 * 1024));
+        file.take(to_read as u64)
+            .read_to_end(&mut bytes)
             .map_err(|e| Error::io(&self.path, e))?;
         if bytes.is_empty() {
             return Ok(Vec::new());
@@ -97,8 +103,38 @@ impl Tailer {
         if consumed > 0 {
             self.pending.drain(..consumed);
         }
+        if self.pending.len() > MAX_PENDING_BYTES {
+            tracing::warn!(
+                path = %self.path.display(),
+                pending = self.pending.len(),
+                "dropping oversized partial line from tailed file"
+            );
+            self.pending.clear();
+        }
 
         Ok(lines)
+    }
+}
+
+/// Find a safe starting offset near the end of the file.
+///
+/// Snort's file connector flushes in fixed-size chunks and can leave a partial
+/// record at EOF. Starting at `len` would parse the tail of that record as a
+/// new line. Start at the beginning of the final partial line instead.
+fn tail_offset(path: &Path, len: u64) -> std::io::Result<u64> {
+    const TAIL_BYTES: u64 = 64 * 1024;
+    if len == 0 {
+        return Ok(0);
+    }
+    let start = len.saturating_sub(TAIL_BYTES);
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut bytes)?;
+    match bytes.iter().rposition(|byte| *byte == b'\n') {
+        Some(index) => Ok(start + index as u64 + 1),
+        None if start == 0 => Ok(0),
+        None => Ok(len),
     }
 }
 
@@ -162,5 +198,18 @@ mod tests {
 
         append(&path, "new\n");
         assert_eq!(tailer.poll().unwrap(), vec!["new"]);
+    }
+
+    #[test]
+    fn from_end_resumes_partial_final_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("extractor.jsonl");
+        append(&path, "{\"a\":1}\n{\"b\":");
+
+        let mut tailer = Tailer::from_end(&path).unwrap();
+        assert!(tailer.poll().unwrap().is_empty());
+
+        append(&path, "2}\n");
+        assert_eq!(tailer.poll().unwrap(), vec!["{\"b\":2}"]);
     }
 }

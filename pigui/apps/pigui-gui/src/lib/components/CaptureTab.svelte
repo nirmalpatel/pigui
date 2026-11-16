@@ -183,9 +183,11 @@
       void refreshServices();
       void refreshVersions();
       interval = setInterval(() => {
-        void refreshServices();
-        void refreshVersions();
-      }, 5000);
+        if (!document.hidden) {
+          void refreshServices();
+          void refreshVersions();
+        }
+      }, 15_000);
     }
     void refreshHelper();
     return () => {

@@ -23,6 +23,7 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 dns-lookup = "4"
 dotenvy = "0.15"
+libc = "0.2"
 psl = "2"
 rusqlite = { version = "0.41", features = ["bundled", "functions"] }
 serde = { version = "1", features = ["derive"] }

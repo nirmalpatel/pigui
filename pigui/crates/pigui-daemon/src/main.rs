@@ -23,9 +23,13 @@ struct Args {
     #[arg(long)]
     alerts_file: Option<PathBuf>,
 
-    /// Start reading at the current end of the alert file.
-    #[arg(long)]
+    /// Start reading at the current end of the files (default).
+    #[arg(long, conflicts_with = "replay")]
     from_end: bool,
+
+    /// Replay existing file content from the beginning instead of the end.
+    #[arg(long)]
+    replay: bool,
 
     /// Ingest the alert file once and exit.
     #[arg(long)]
@@ -40,7 +44,7 @@ struct Args {
     socket: Option<PathBuf>,
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let args = Args::parse();
@@ -76,10 +80,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(warning = %warning);
     }
 
-    let tailer = if args.from_end {
-        Tailer::from_end(&alerts_file)?
-    } else {
+    let replay = args.replay && !args.from_end;
+    let tailer = if replay {
         Tailer::new(&alerts_file)
+    } else {
+        Tailer::from_end(&alerts_file)?
     };
 
     let state = Arc::new(AppState::new(config.clone(), store, capabilities));
@@ -96,7 +101,11 @@ async fn main() -> anyhow::Result<()> {
         ingest::run(ingest_state, tailer).await;
     });
 
-    let extractor_tailer = Tailer::new(&config.extractor_json);
+    let extractor_tailer = if replay {
+        Tailer::new(&config.extractor_json)
+    } else {
+        Tailer::from_end(&config.extractor_json)?
+    };
     let extractor_state = state.clone();
     tokio::spawn(async move {
         ingest::run_extractor(extractor_state, extractor_tailer).await;
@@ -106,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
     ingest::spawn_name_resolver(state.clone());
     ingest::spawn_maintenance(state.clone());
     pigui_daemon::firewall::spawn_reconciler(state.clone());
+    pigui_daemon::capture_watch::spawn(state.clone());
 
     tracing::info!(
         environment = %config.environment,

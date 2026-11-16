@@ -117,7 +117,7 @@ impl Config {
         let process_poll_ms = env::var("PIGUI_PROCESS_POLL_MS")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(1_000);
+            .unwrap_or(2_000);
 
         Ok(Self {
             home,
@@ -224,7 +224,7 @@ mod tests {
             extractor_json: home.join("var/log/snort/file_connector_pigui_transmit"),
             snort_pidfile: home.join("var/log/snort/snort.pid"),
             snort_control_socket: home.join("var/run/snort.sock"),
-            process_poll_ms: 1000,
+            process_poll_ms: 2000,
         }
     }
 }

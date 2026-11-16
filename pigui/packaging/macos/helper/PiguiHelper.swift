@@ -89,6 +89,10 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     private var firewallBlockLabels: [String] = []
     private var firewallAllowLabels: [String] = []
     private var firewallLastError: String?
+    private var pfStatusCache: (checkedAt: Date, enabled: Bool, text: String)?
+    private var anchorCache: [String: (checkedAt: Date, loaded: Bool)] = [:]
+    private let helperCacheTTL: TimeInterval = 5
+    private let auditMaxBytes: UInt64 = 10 * 1024 * 1024
     private var pflogProcess: Process?
     private var pflogPipe: Pipe?
     private var pflogLineBuffer = ""
@@ -485,6 +489,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
                 firewallLastError = "PF release token is missing"
             }
             firewallPFEnabledByPigui = false
+            pfStatusCache = nil
         }
 
         firewallGeneration = 0
@@ -757,9 +762,15 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func pfStatus() throws -> (enabled: Bool, text: String) {
+        if let cached = pfStatusCache,
+           Date().timeIntervalSince(cached.checkedAt) < helperCacheTTL {
+            return (cached.enabled, cached.text)
+        }
         let result = try runCommand(pfctlPath, ["-s", "info"])
         let text = result.combined
-        return (text.contains("Status: Enabled"), text)
+        let enabled = text.contains("Status: Enabled")
+        pfStatusCache = (Date(), enabled, text)
+        return (enabled, text)
     }
 
     private func parsePFToken(_ text: String) -> String? {
@@ -800,6 +811,7 @@ final class HelperService: NSObject, PiguiHelperProtocol {
         }
         firewallPFToken = token
         firewallPFEnabledByPigui = true
+        pfStatusCache = nil
         return true
     }
 
@@ -918,11 +930,13 @@ final class HelperService: NSObject, PiguiHelperProtocol {
                 "pfctl apply failed for \(anchor): \(result.combined.trimmingCharacters(in: .whitespacesAndNewlines))"
             )
         }
+        anchorCache.removeValue(forKey: anchor)
     }
 
     private func flushAnchor(_ anchor: String) {
         _ = try? runCommand(pfctlPath, ["-a", anchor, "-F", "all"])
         _ = try? runCommand(pfctlPath, ["-a", anchor, "-f", "/dev/null"])
+        anchorCache.removeValue(forKey: anchor)
     }
 
     private func flushDynamicTables() {
@@ -935,11 +949,17 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func anchorHasRules(_ anchor: String) -> Bool {
+        if let cached = anchorCache[anchor],
+           Date().timeIntervalSince(cached.checkedAt) < helperCacheTTL {
+            return cached.loaded
+        }
         guard let result = try? runCommand(pfctlPath, ["-a", anchor, "-sr"]) else {
             return false
         }
-        return result.status == 0
+        let loaded = result.status == 0
             && !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        anchorCache[anchor] = (Date(), loaded)
+        return loaded
     }
 
     private func ruleLabels(from text: String) -> [String] {
@@ -1503,12 +1523,25 @@ final class HelperService: NSObject, PiguiHelperProtocol {
     }
 
     private func audit(method: String, params: [String: Any], result: [String: Any]) {
+        let readOnlyMethods: Set<String> = [
+            "version", "status", "firewall_status", "firewall_counters", "firewall_events",
+        ]
+        if readOnlyMethods.contains(method) {
+            return
+        }
         try? fileManager.createDirectory(
             atPath: auditDir,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o755]
         )
         _ = chown(auditDir, 0, 0)
+        if let attributes = try? fileManager.attributesOfItem(atPath: auditPath),
+           let size = attributes[.size] as? UInt64,
+           size > auditMaxBytes {
+            let rotated = auditPath + ".1"
+            try? fileManager.removeItem(atPath: rotated)
+            try? fileManager.moveItem(atPath: auditPath, toPath: rotated)
+        }
 
         var auditResult = result
         if method == "firewall_events",

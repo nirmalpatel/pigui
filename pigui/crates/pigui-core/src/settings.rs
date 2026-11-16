@@ -46,8 +46,8 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
-            refresh_ms: 2_000,
-            page_size: 200,
+            refresh_ms: 5_000,
+            page_size: 100,
             detail_alert_limit: 10,
             stale_after_secs: 600,
         }
@@ -62,9 +62,7 @@ pub struct LimitSettings {
 
 impl Default for LimitSettings {
     fn default() -> Self {
-        Self {
-            max_page_size: 1_000,
-        }
+        Self { max_page_size: 500 }
     }
 }
 
@@ -76,7 +74,7 @@ pub struct CollectorSettings {
 
 impl Default for CollectorSettings {
     fn default() -> Self {
-        Self { poll_ms: 1_000 }
+        Self { poll_ms: 2_000 }
     }
 }
 
@@ -241,7 +239,7 @@ mod tests {
             serde_json::from_str(r#"{"theme":"dark","ui":{"page_size":50}}"#).unwrap();
         assert_eq!(settings.theme, ThemeMode::Dark);
         assert_eq!(settings.ui.page_size, 50);
-        assert_eq!(settings.ui.refresh_ms, 2_000);
+        assert_eq!(settings.ui.refresh_ms, 5_000);
         assert_eq!(settings.retention.alerts_days, 30);
     }
 }

@@ -52,6 +52,20 @@ You do **not** need a `.env` file. The dev script uses `.env` when it exists
 and otherwise falls back to `.env.example`. Create a `.env` only when you need
 to override defaults.
 
+### Capture interface and VPNs
+
+PIGUI captures one interface at a time. When `PIGUI_SNORT_INTERFACE` is unset,
+the dev script and daemon select the current default-route interface. While
+capture is running, the daemon watches the default route and follows changes
+after the new interface is stable for about six seconds. This means turning a
+full-tunnel VPN on or off moves capture between `utunN` and `en0` automatically.
+
+If a full-tunnel VPN is active, `en0` carries only the encrypted tunnel
+underlay; PIGUI must capture the `utunN` interface to see browser traffic. Set
+`PIGUI_SNORT_INTERFACE` explicitly to pin capture to one interface and disable
+auto-follow. The status payload reports a coverage warning when a pinned
+capture interface differs from the default route.
+
 ## Optional: customize the environment
 
 ```bash
@@ -103,8 +117,8 @@ Useful commands:
 
 Live data comes from two sources:
 
-- `nettop` snapshots every second provide active connections, process names,
-  PIDs, interfaces, and byte counters.
+- `nettop` snapshots at the configured collector interval (2 seconds by default)
+  provide active connections, process names, PIDs, interfaces, and byte counters.
 - Snort extractor records provide completed `conn` events and DNS/TLS/HTTP/QUIC
   metadata used to enrich destinations and completed connections.
 

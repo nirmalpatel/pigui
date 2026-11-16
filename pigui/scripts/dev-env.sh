@@ -29,6 +29,6 @@ export PIGUI_SNORT_CONFIG_DIR="${PIGUI_SNORT_CONFIG_DIR:-./var/snort}"
 export PIGUI_SNORT_PIDFILE="${PIGUI_SNORT_PIDFILE:-./var/log/snort/snort.pid}"
 export PIGUI_SNORT_CONTROL_SOCKET="${PIGUI_SNORT_CONTROL_SOCKET:-./var/run/snort.sock}"
 export PIGUI_EXTRACTOR_JSON="${PIGUI_EXTRACTOR_JSON:-./var/log/snort/file_connector_pigui_transmit}"
-export PIGUI_PROCESS_POLL_MS="${PIGUI_PROCESS_POLL_MS:-1000}"
+export PIGUI_PROCESS_POLL_MS="${PIGUI_PROCESS_POLL_MS:-2000}"
 
 mkdir -p var/run var/log var/lib var/log/snort var/snort

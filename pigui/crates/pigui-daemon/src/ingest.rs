@@ -24,7 +24,12 @@ pub fn ingest_file(store: &mut Store, path: &Path) -> Result<IngestStats> {
 /// Continuously tail the alert file and persist new alerts.
 pub async fn run(state: Arc<AppState>, mut tailer: Tailer) {
     let mut ticker = interval(Duration::from_millis(500));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let path = tailer.path().to_path_buf();
+    let mut summary_at = std::time::Instant::now();
+    let mut window_inserted = 0u64;
+    let mut window_duplicates = 0u64;
+    let mut window_malformed = 0u64;
 
     loop {
         tokio::select! {
@@ -50,25 +55,55 @@ pub async fn run(state: Arc<AppState>, mut tailer: Tailer) {
         };
 
         if !entries.is_empty() {
-            match state.store.lock() {
-                Ok(mut store) => match store.insert_alerts(&entries) {
-                    Ok(inserted) => stats.inserted = inserted.inserted,
-                    Err(error) => {
-                        tracing::error!(%error, "failed to persist alerts");
-                    }
-                },
-                Err(_) => tracing::error!("store lock poisoned; dropping batch"),
+            let store = state.store.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut total = IngestStats::default();
+                for chunk in entries.chunks(1000) {
+                    let mut guard = store.lock().map_err(|_| {
+                        pigui_core::error::Error::Database("store lock poisoned".into())
+                    })?;
+                    let inserted = guard.insert_alerts(chunk)?;
+                    total.inserted += inserted.inserted;
+                    total.duplicates += inserted.duplicates;
+                }
+                Ok::<IngestStats, pigui_core::error::Error>(total)
+            })
+            .await;
+            match result {
+                Ok(Ok(inserted)) => {
+                    stats.inserted = inserted.inserted;
+                    stats.duplicates = inserted.duplicates;
+                }
+                Ok(Err(error)) => tracing::error!(%error, "failed to persist alerts"),
+                Err(error) => tracing::error!(%error, "alert insert task failed"),
             }
         }
 
         state.record_ingest(&stats);
         if stats.inserted > 0 {
-            tracing::info!(
+            tracing::debug!(
                 inserted = stats.inserted,
                 duplicates = stats.duplicates,
                 malformed = stats.malformed,
                 "ingested alert batch"
             );
+        }
+        window_inserted += stats.inserted;
+        window_duplicates += stats.duplicates;
+        window_malformed += stats.malformed;
+        if summary_at.elapsed() >= Duration::from_secs(60) {
+            if window_inserted > 0 || window_malformed > 0 {
+                tracing::info!(
+                    inserted = window_inserted,
+                    duplicates = window_duplicates,
+                    malformed = window_malformed,
+                    "alert ingestion summary"
+                );
+            }
+            summary_at = std::time::Instant::now();
+            window_inserted = 0;
+            window_duplicates = 0;
+            window_malformed = 0;
         }
     }
 }
@@ -76,7 +111,11 @@ pub async fn run(state: Arc<AppState>, mut tailer: Tailer) {
 /// Continuously tail the extractor JSONL file and persist protocol records.
 pub async fn run_extractor(state: Arc<AppState>, mut tailer: Tailer) {
     let mut ticker = interval(Duration::from_millis(500));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let path = tailer.path().to_path_buf();
+    let mut summary_at = std::time::Instant::now();
+    let mut window_inserted = 0u64;
+    let mut window_malformed = 0u64;
 
     loop {
         tokio::select! {
@@ -109,20 +148,45 @@ pub async fn run_extractor(state: Arc<AppState>, mut tailer: Tailer) {
 
         let mut inserted = 0;
         if !records.is_empty() {
-            match state.store.lock() {
-                Ok(mut store) => match store
-                    .insert_extractor_records(&records, crate::store::unix_now())
-                {
-                    Ok(stats) => inserted = stats.inserted,
-                    Err(error) => tracing::error!(%error, "failed to persist extractor records"),
-                },
-                Err(_) => tracing::error!("store lock poisoned; dropping extractor batch"),
-            }
+            let now = crate::store::unix_now();
+            let store = state.store.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut total = 0u64;
+                for chunk in records.chunks(1000) {
+                    let mut guard = store.lock().map_err(|_| {
+                        pigui_core::error::Error::Database("store lock poisoned".into())
+                    })?;
+                    total += guard.insert_extractor_records(chunk, now)?.inserted;
+                }
+                Ok::<u64, pigui_core::error::Error>(total)
+            })
+            .await;
+            match result {
+                Ok(Ok(count)) => inserted = count,
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "failed to persist extractor records")
+                }
+                Err(error) => tracing::error!(%error, "extractor insert task failed"),
+            };
         }
 
         state.record_extractor(inserted, malformed, crate::store::unix_now());
         if inserted > 0 || malformed > 0 {
-            tracing::info!(inserted, malformed, "ingested extractor batch");
+            tracing::debug!(inserted, malformed, "ingested extractor batch");
+        }
+        window_inserted += inserted;
+        window_malformed += malformed;
+        if summary_at.elapsed() >= Duration::from_secs(60) {
+            if window_inserted > 0 || window_malformed > 0 {
+                tracing::info!(
+                    inserted = window_inserted,
+                    malformed = window_malformed,
+                    "extractor ingestion summary"
+                );
+            }
+            summary_at = std::time::Instant::now();
+            window_inserted = 0;
+            window_malformed = 0;
         }
     }
 }
@@ -130,17 +194,15 @@ pub async fn run_extractor(state: Arc<AppState>, mut tailer: Tailer) {
 /// Poll nettop on a dedicated thread so the async runtime is never blocked.
 pub fn spawn_process_collector(state: Arc<AppState>) {
     std::thread::spawn(move || {
-        let mut current_interface =
-            state
-                .capture()
-                .map(|capture| capture.interface)
-                .or_else(|| {
-                    state
-                        .config
-                        .snort_interface
-                        .clone()
-                        .or_else(pigui_collector::default_interface)
-                });
+        let default_interface = state
+            .config
+            .snort_interface
+            .clone()
+            .or_else(pigui_collector::default_interface);
+        let mut current_interface = state
+            .capture()
+            .map(|capture| capture.interface)
+            .or_else(|| default_interface.clone());
         let mut collector = MacosCollector::new(current_interface.clone());
         let initial_poll = state.settings().collector.poll_ms.max(250);
 
@@ -154,13 +216,7 @@ pub fn spawn_process_collector(state: Arc<AppState>) {
             let interface = state
                 .capture()
                 .map(|capture| capture.interface)
-                .or_else(|| {
-                    state
-                        .config
-                        .snort_interface
-                        .clone()
-                        .or_else(pigui_collector::default_interface)
-                });
+                .or_else(|| default_interface.clone());
             if interface != current_interface {
                 tracing::info!(
                     interface = interface.as_deref().unwrap_or("all"),

@@ -143,19 +143,22 @@
       status = nextStatus;
       rules = ruleList.rules;
       blocks = blockList.blocks;
-      try {
-        const counterList = await invoke<CountersResponse>("firewall_counters");
-        counters = [
-          ...(counterList.data?.block ?? []),
-          ...(counterList.data?.allow ?? []),
-        ];
-      } catch {
-        counters = [];
-      }
     } catch (cause) {
       error = String(cause);
     } finally {
       loading = false;
+    }
+  }
+
+  async function refreshCounters() {
+    try {
+      const counterList = await invoke<CountersResponse>("firewall_counters");
+      counters = [
+        ...(counterList.data?.block ?? []),
+        ...(counterList.data?.allow ?? []),
+      ];
+    } catch {
+      counters = [];
     }
   }
 
@@ -379,19 +382,26 @@
   onMount(() => {
     void refresh();
     void pollEvents();
+    void refreshCounters();
     const refreshTimer = setInterval(() => {
       if (!document.hidden) {
         void refresh();
       }
-    }, 3000);
+    }, 10_000);
     const eventTimer = setInterval(() => {
       if (!document.hidden) {
         void pollEvents();
       }
-    }, 2000);
+    }, 5_000);
+    const counterTimer = setInterval(() => {
+      if (!document.hidden) {
+        void refreshCounters();
+      }
+    }, 15_000);
     return () => {
       clearInterval(refreshTimer);
       clearInterval(eventTimer);
+      clearInterval(counterTimer);
     };
   });
 </script>

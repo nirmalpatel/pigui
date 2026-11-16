@@ -12,7 +12,11 @@ pub fn default_interface() -> Option<String> {
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().find_map(|line| {
+    parse_default_interface(&text)
+}
+
+fn parse_default_interface(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
         line.trim()
             .strip_prefix("interface:")
             .map(|value| value.trim().to_string())
@@ -20,7 +24,32 @@ pub fn default_interface() -> Option<String> {
     })
 }
 
+/// Explain when capture is bound to a different interface than the default
+/// route, which commonly means VPN/tunnel traffic is not visible.
+pub fn interface_mismatch_warning(
+    capture_interface: Option<&str>,
+    default_interface: Option<&str>,
+) -> Option<String> {
+    let capture = capture_interface.filter(|value| !value.is_empty())?;
+    let default = default_interface.filter(|value| !value.is_empty())?;
+    (capture != default).then(|| {
+        format!(
+            "capture interface {capture} differs from default route {default}; tunneled/VPN traffic may be missing"
+        )
+    })
+}
+
 pub fn run_nettop(interface_filter: Option<&str>) -> Result<CollectorSnapshot> {
+    let mut metadata = HashMap::new();
+    run_nettop_cached(interface_filter, &mut metadata, true)
+}
+
+/// Run one `nettop` snapshot, reusing cached `ps` metadata when possible.
+pub fn run_nettop_cached(
+    interface_filter: Option<&str>,
+    metadata: &mut HashMap<u32, (String, String)>,
+    refresh_metadata: bool,
+) -> Result<CollectorSnapshot> {
     let output = Command::new("nettop")
         .args(["-L", "1", "-x", "-n"])
         .output()
@@ -35,16 +64,24 @@ pub fn run_nettop(interface_filter: Option<&str>) -> Result<CollectorSnapshot> {
     }
 
     let mut snapshot = parse_nettop(&String::from_utf8_lossy(&output.stdout), interface_filter);
-    enrich_process_metadata(&mut snapshot);
+    let needs_refresh = refresh_metadata
+        || snapshot
+            .processes
+            .iter()
+            .any(|process| !metadata.contains_key(&process.pid));
+    if needs_refresh {
+        *metadata = read_process_metadata();
+    }
+    apply_process_metadata(&mut snapshot, metadata);
     Ok(snapshot)
 }
 
-fn enrich_process_metadata(snapshot: &mut CollectorSnapshot) {
+fn read_process_metadata() -> HashMap<u32, (String, String)> {
     let Ok(output) = Command::new("ps")
         .args(["-axo", "pid=,user=,comm="])
         .output()
     else {
-        return;
+        return HashMap::new();
     };
     let text = String::from_utf8_lossy(&output.stdout);
     let mut metadata: HashMap<u32, (String, String)> = HashMap::new();
@@ -67,6 +104,13 @@ fn enrich_process_metadata(snapshot: &mut CollectorSnapshot) {
         metadata.insert(pid, (user, command));
     }
 
+    metadata
+}
+
+fn apply_process_metadata(
+    snapshot: &mut CollectorSnapshot,
+    metadata: &HashMap<u32, (String, String)>,
+) {
     for process in &mut snapshot.processes {
         if let Some((user, command)) = metadata.get(&process.pid) {
             if let Some(name) = command.rsplit('/').next().filter(|name| !name.is_empty()) {
@@ -342,5 +386,39 @@ mod tests {
                 .iter()
                 .all(|socket| socket.server_port != 0 && socket.state.as_deref() != Some("Listen"))
         );
+    }
+
+    #[test]
+    fn parses_default_route_interface() {
+        let output = "   route to: default\n\
+                      destination: default\n\
+                      interface: utun6\n";
+        assert_eq!(parse_default_interface(output), Some("utun6".to_string()));
+    }
+
+    #[test]
+    fn missing_default_route_interface_is_none() {
+        assert_eq!(
+            parse_default_interface("route: writing to routing socket\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn warns_when_capture_interface_differs_from_default() {
+        let warning = interface_mismatch_warning(Some("en0"), Some("utun6")).unwrap();
+        assert!(warning.contains("en0"));
+        assert!(warning.contains("utun6"));
+    }
+
+    #[test]
+    fn no_warning_for_matching_or_missing_interfaces() {
+        assert_eq!(
+            interface_mismatch_warning(Some("utun6"), Some("utun6")),
+            None
+        );
+        assert_eq!(interface_mismatch_warning(None, Some("utun6")), None);
+        assert_eq!(interface_mismatch_warning(Some("en0"), None), None);
+        assert_eq!(interface_mismatch_warning(Some(""), Some("utun6")), None);
     }
 }

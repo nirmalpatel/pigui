@@ -50,7 +50,8 @@ what is planned.
   anchor/table/pflog actions, dev-mode launchd/XPC capture, and capture-state
   recovery exist; fuller GUI onboarding remains.
 - Rule bundles and policy engine.
-- Log rotation (database retention is implemented).
+- Log rotation is size-based for daemon and helper audit logs; database
+  retention is implemented.
 - Sensor stats and firewall action history; helper privileged-action audit exists.
 - `/Applications` helper registration/approval verification and full production onboarding.
 - Linux and Windows adapters.

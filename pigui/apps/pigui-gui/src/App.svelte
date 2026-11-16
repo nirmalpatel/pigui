@@ -58,25 +58,25 @@
   let lastAutoCaptureAttempt = 0;
 
   let alertsOffset = $state(0);
-  let alertsLimit = $state(200);
+  let alertsLimit = $state(100);
   let alertsTotal = $state(0);
   let destinationsOffset = $state(0);
-  let destinationsLimit = $state(200);
+  let destinationsLimit = $state(100);
   let destinationsTotal = $state(0);
   let flowsOffset = $state(0);
-  let flowsLimit = $state(300);
+  let flowsLimit = $state(100);
   let flowsTotal = $state(0);
   let processesOffset = $state(0);
-  let processesLimit = $state(200);
+  let processesLimit = $state(100);
   let processesTotal = $state(0);
   let connectionsOffset = $state(0);
-  let connectionsLimit = $state(200);
+  let connectionsLimit = $state(100);
   let connectionsTotal = $state(0);
   let domainsOffset = $state(0);
-  let domainsLimit = $state(300);
+  let domainsLimit = $state(100);
   let domainsTotal = $state(0);
   let dnsOffset = $state(0);
-  let dnsLimit = $state(500);
+  let dnsLimit = $state(100);
   let dnsTotal = $state(0);
 
   let alertsQuery = $state<ListQueryState>({});
@@ -86,8 +86,8 @@
   let domainsQuery = $state<ListQueryState>({});
   let dnsQuery = $state<ListQueryState>({});
 
-  const pageSize = $derived(settings?.ui.page_size ?? 200);
-  const refreshMs = $derived(settings?.ui.refresh_ms ?? 2000);
+  const pageSize = $derived(settings?.ui.page_size ?? 100);
+  const refreshMs = $derived(settings?.ui.refresh_ms ?? 5000);
 
   const needsReviewCount = $derived(
     domains.filter((domain) => needsReview(domain)).length,
@@ -189,52 +189,126 @@
     }
   }
 
+  async function refreshStatus() {
+    status = await invoke<StatusPayload>("get_status");
+  }
+
+  async function refreshTab(which: Tab) {
+    switch (which) {
+      case "overview": {
+        const [nextAlerts, nextDestinations, nextProcesses, nextDomains] =
+          await Promise.all([
+            invoke<AlertList>("list_alerts", { limit: alertsLimit, offset: alertsOffset, ...alertsQuery }),
+            invoke<DestinationList>("list_destinations", { limit: destinationsLimit, offset: destinationsOffset, ...destinationsQuery }),
+            invoke<ProcessList>("list_processes", { limit: processesLimit, offset: processesOffset, ...processesQuery }),
+            invoke<DomainList>("list_domains", { limit: domainsLimit, offset: domainsOffset, ...domainsQuery }),
+          ]);
+        alerts = nextAlerts.alerts;
+        alertsTotal = nextAlerts.total;
+        destinations = nextDestinations.destinations;
+        destinationsTotal = nextDestinations.total;
+        processes = nextProcesses.processes;
+        processesTotal = nextProcesses.total;
+        domains = nextDomains.domains;
+        domainsTotal = nextDomains.total;
+        break;
+      }
+      case "alerts": {
+        const next = await invoke<AlertList>("list_alerts", {
+          limit: alertsLimit,
+          offset: alertsOffset,
+          ...alertsQuery,
+        });
+        alerts = next.alerts;
+        alertsTotal = next.total;
+        break;
+      }
+      case "destinations": {
+        const next = await invoke<DestinationList>("list_destinations", {
+          limit: destinationsLimit,
+          offset: destinationsOffset,
+          ...destinationsQuery,
+        });
+        destinations = next.destinations;
+        destinationsTotal = next.total;
+        break;
+      }
+      case "connections": {
+        const [nextFlows, nextConnections] = await Promise.all([
+          invoke<FlowList>("list_flows", { limit: flowsLimit, offset: flowsOffset, ...connectionsQuery }),
+          invoke<ConnectionList>("list_connections", { limit: connectionsLimit, offset: connectionsOffset, ...connectionsQuery }),
+        ]);
+        flows = nextFlows.flows;
+        flowsTotal = nextFlows.total;
+        connections = nextConnections.connections;
+        connectionsTotal = nextConnections.total;
+        break;
+      }
+      case "processes": {
+        const next = await invoke<ProcessList>("list_processes", {
+          limit: processesLimit,
+          offset: processesOffset,
+          ...processesQuery,
+        });
+        processes = next.processes;
+        processesTotal = next.total;
+        break;
+      }
+      case "domains": {
+        const [nextDomains, nextWatched] = await Promise.all([
+          invoke<DomainList>("list_domains", { limit: domainsLimit, offset: domainsOffset, ...domainsQuery }),
+          invoke<WatchedList>("list_watched_domains"),
+        ]);
+        domains = nextDomains.domains;
+        domainsTotal = nextDomains.total;
+        watchedDomains = nextWatched.watched;
+        break;
+      }
+      case "dns": {
+        const next = await invoke<DnsList>("list_dns", {
+          limit: dnsLimit,
+          offset: dnsOffset,
+          ...dnsQuery,
+        });
+        dnsObservations = next.observations;
+        dnsTotal = next.total;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   async function refresh() {
+    if (refreshing) {
+      return;
+    }
     refreshing = true;
     try {
-      const [
-        nextStatus,
-        nextAlerts,
-        nextDestinations,
-        nextFlows,
-        nextProcesses,
-        nextConnections,
-        nextDomains,
-        nextDns,
-        nextWatched,
-      ] = await Promise.all([
-        invoke<StatusPayload>("get_status"),
-        invoke<AlertList>("list_alerts", { limit: alertsLimit, offset: alertsOffset, ...alertsQuery }),
-        invoke<DestinationList>("list_destinations", { limit: destinationsLimit, offset: destinationsOffset, ...destinationsQuery }),
-        invoke<FlowList>("list_flows", { limit: flowsLimit, offset: flowsOffset, ...connectionsQuery }),
-        invoke<ProcessList>("list_processes", { limit: processesLimit, offset: processesOffset, ...processesQuery }),
-        invoke<ConnectionList>("list_connections", { limit: connectionsLimit, offset: connectionsOffset, ...connectionsQuery }),
-        invoke<DomainList>("list_domains", { limit: domainsLimit, offset: domainsOffset, ...domainsQuery }),
-        invoke<DnsList>("list_dns", { limit: dnsLimit, offset: dnsOffset, ...dnsQuery }),
-        invoke<WatchedList>("list_watched_domains"),
-      ]);
-      status = nextStatus;
-      alerts = nextAlerts.alerts;
-      alertsTotal = nextAlerts.total;
-      destinations = nextDestinations.destinations;
-      destinationsTotal = nextDestinations.total;
-      flows = nextFlows.flows;
-      flowsTotal = nextFlows.total;
-      processes = nextProcesses.processes;
-      processesTotal = nextProcesses.total;
-      connections = nextConnections.connections;
-      connectionsTotal = nextConnections.total;
-      domains = nextDomains.domains;
-      domainsTotal = nextDomains.total;
-      dnsObservations = nextDns.observations;
-      dnsTotal = nextDns.total;
-      watchedDomains = nextWatched.watched;
+      await refreshStatus();
+      await refreshTab(tab);
       error = null;
       lastUpdated = new Date().toLocaleTimeString();
     } catch (cause) {
       error = String(cause);
     } finally {
       loading = false;
+      refreshing = false;
+    }
+  }
+
+  async function selectTab(next: Tab) {
+    tab = next;
+    if (refreshing) {
+      return;
+    }
+    refreshing = true;
+    try {
+      await refreshTab(next);
+      error = null;
+    } catch (cause) {
+      error = String(cause);
+    } finally {
       refreshing = false;
     }
   }
@@ -341,7 +415,7 @@
     try {
       await invoke("ensure_capture");
       autoCaptureError = null;
-      await refresh();
+      await refreshStatus();
     } catch (cause) {
       autoCaptureError = String(cause);
     }
@@ -359,10 +433,12 @@
   });
 
   $effect(() => {
-    const interval = setInterval(
-      () => void refresh().then(() => maybeAutoCapture()),
-      refreshMs,
-    );
+    const interval = setInterval(() => {
+      if (document.hidden) {
+        return;
+      }
+      void refresh().then(() => maybeAutoCapture());
+    }, refreshMs);
     return () => clearInterval(interval);
   });
 </script>
@@ -423,9 +499,7 @@
       <TabNav
         {tab}
         totals={dbTotals}
-        onSelect={(next) => {
-          tab = next;
-        }}
+        onSelect={(next) => void selectTab(next)}
       />
 
       {#if activePage}

@@ -3,6 +3,7 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pigui_core::client::DaemonClient;
@@ -183,10 +184,23 @@ fn stop_daemon(config: &Config) {
     }
 }
 
+fn rotate_log(path: &std::path::Path, max_bytes: u64) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() < max_bytes {
+        return;
+    }
+    let rotated = path.with_extension("log.1");
+    let _ = std::fs::remove_file(&rotated);
+    let _ = std::fs::rename(path, rotated);
+}
+
 fn start_daemon_process(config: &Config) -> Result<u32, String> {
     let daemon = daemon_binary()?;
     std::fs::create_dir_all(&config.log_dir).map_err(|error| error.to_string())?;
     let log_path = config.log_dir.join("daemon.log");
+    rotate_log(&log_path, 10 * 1024 * 1024);
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -373,8 +387,26 @@ fn reconcile_services() -> Result<String, String> {
 }
 
 fn client() -> Result<DaemonClient, String> {
+    static CLIENT: OnceLock<DaemonClient> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
     let config = Config::load().map_err(|error| error.to_string())?;
-    Ok(DaemonClient::new(&config.socket_path))
+    let client = DaemonClient::new(&config.socket_path);
+    let _ = CLIENT.set(client.clone());
+    Ok(client)
+}
+
+fn call_daemon(method: &str, params: Value) -> Result<Value, String> {
+    client()?
+        .call(method, params)
+        .map_err(|error| error.to_string())
+}
+
+async fn call_daemon_async(method: &'static str, params: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || call_daemon(method, params))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn list_params(
@@ -394,41 +426,31 @@ fn list_params(
 }
 
 #[tauri::command]
-fn get_settings() -> Result<AppSettings, String> {
-    let value = client()?
-        .call(METHOD_SETTINGS_GET, json!({}))
-        .map_err(|error| error.to_string())?;
+async fn get_settings() -> Result<AppSettings, String> {
+    let value = call_daemon_async(METHOD_SETTINGS_GET, json!({})).await?;
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn update_settings(patch: Value) -> Result<AppSettings, String> {
-    let value = client()?
-        .call(METHOD_SETTINGS_UPDATE, patch)
-        .map_err(|error| error.to_string())?;
+async fn update_settings(patch: Value) -> Result<AppSettings, String> {
+    let value = call_daemon_async(METHOD_SETTINGS_UPDATE, patch).await?;
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn reset_settings() -> Result<AppSettings, String> {
-    let value = client()?
-        .call(METHOD_SETTINGS_RESET, json!({}))
-        .map_err(|error| error.to_string())?;
+async fn reset_settings() -> Result<AppSettings, String> {
+    let value = call_daemon_async(METHOD_SETTINGS_RESET, json!({})).await?;
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn maintenance_stats() -> Result<Value, String> {
-    client()?
-        .call(METHOD_MAINTENANCE_STATS, json!({}))
-        .map_err(|error| error.to_string())
+async fn maintenance_stats() -> Result<Value, String> {
+    call_daemon_async(METHOD_MAINTENANCE_STATS, json!({})).await
 }
 
 #[tauri::command]
-fn prune_now() -> Result<Value, String> {
-    client()?
-        .call(METHOD_MAINTENANCE_PRUNE, json!({}))
-        .map_err(|error| error.to_string())
+async fn prune_now() -> Result<Value, String> {
+    call_daemon_async(METHOD_MAINTENANCE_PRUNE, json!({})).await
 }
 
 #[tauri::command]
@@ -442,7 +464,13 @@ fn service_reconcile() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn service_versions() -> Result<Value, String> {
+async fn service_versions() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(service_versions_blocking)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn service_versions_blocking() -> Result<Value, String> {
     let config = Config::load().map_err(|error| error.to_string())?;
     let status = service_status_json().unwrap_or(Value::Null);
     let helper_state = service_field(&status, "helper");
@@ -505,17 +533,13 @@ fn service_unregister_helper() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn helper_status() -> Result<Value, String> {
-    client()?
-        .call(METHOD_CAPTURE_HELPER_STATUS, json!({}))
-        .map_err(|error| error.to_string())
+async fn helper_status() -> Result<Value, String> {
+    call_daemon_async(METHOD_CAPTURE_HELPER_STATUS, json!({})).await
 }
 
 #[tauri::command]
-fn capture_status() -> Result<Value, String> {
-    client()?
-        .call(METHOD_CAPTURE_STATUS, json!({}))
-        .map_err(|error| error.to_string())
+async fn capture_status() -> Result<Value, String> {
+    call_daemon_async(METHOD_CAPTURE_STATUS, json!({})).await
 }
 
 #[tauri::command]
@@ -533,109 +557,94 @@ fn helper_disable_capture() -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn ensure_capture() -> Result<Value, String> {
-    client()?
-        .call(METHOD_CAPTURE_ENSURE, json!({}))
-        .map_err(|error| error.to_string())
+async fn ensure_capture() -> Result<Value, String> {
+    call_daemon_async(METHOD_CAPTURE_ENSURE, json!({})).await
 }
 
 #[tauri::command]
-fn get_status() -> Result<Value, String> {
-    client()?
-        .call(METHOD_STATUS, json!({}))
-        .map_err(|error| error.to_string())
+async fn get_status() -> Result<Value, String> {
+    call_daemon_async(METHOD_STATUS, json!({})).await
 }
 
 #[tauri::command]
-fn list_alerts(
+async fn list_alerts(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 ) -> Result<Value, String> {
-    client()?
-        .call(METHOD_ALERTS_LIST, list_params(limit, offset, q, sort, dir))
-        .map_err(|error| error.to_string())
+    call_daemon_async(METHOD_ALERTS_LIST, list_params(limit, offset, q, sort, dir)).await
 }
 
 #[tauri::command]
-fn list_destinations(
+async fn list_destinations(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 ) -> Result<Value, String> {
-    client()?
-        .call(
-            METHOD_DESTINATIONS_LIST,
-            list_params(limit, offset, q, sort, dir),
-        )
-        .map_err(|error| error.to_string())
+    call_daemon_async(
+        METHOD_DESTINATIONS_LIST,
+        list_params(limit, offset, q, sort, dir),
+    )
+    .await
 }
 
 #[tauri::command]
-fn list_flows(
+async fn list_flows(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 ) -> Result<Value, String> {
-    client()?
-        .call(METHOD_FLOWS_LIST, list_params(limit, offset, q, sort, dir))
-        .map_err(|error| error.to_string())
+    call_daemon_async(METHOD_FLOWS_LIST, list_params(limit, offset, q, sort, dir)).await
 }
 
 #[tauri::command]
-fn list_processes(
+async fn list_processes(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 ) -> Result<Value, String> {
-    client()?
-        .call(
-            METHOD_PROCESSES_LIST,
-            list_params(limit, offset, q, sort, dir),
-        )
-        .map_err(|error| error.to_string())
+    call_daemon_async(
+        METHOD_PROCESSES_LIST,
+        list_params(limit, offset, q, sort, dir),
+    )
+    .await
 }
 
 #[tauri::command]
-fn list_connections(
+async fn list_connections(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 ) -> Result<Value, String> {
-    client()?
-        .call(
-            METHOD_CONNECTIONS_LIST,
-            list_params(limit, offset, q, sort, dir),
-        )
-        .map_err(|error| error.to_string())
+    call_daemon_async(
+        METHOD_CONNECTIONS_LIST,
+        list_params(limit, offset, q, sort, dir),
+    )
+    .await
 }
 
 #[tauri::command]
-fn destination_detail(ip: String) -> Result<Value, String> {
-    client()?
-        .call(METHOD_DESTINATIONS_DETAIL, json!({ "ip": ip }))
-        .map_err(|error| error.to_string())
+async fn destination_detail(ip: String) -> Result<Value, String> {
+    call_daemon_async(METHOD_DESTINATIONS_DETAIL, json!({ "ip": ip })).await
 }
 
 #[tauri::command]
-fn process_detail(pid: u32) -> Result<Value, String> {
-    client()?
-        .call(METHOD_PROCESSES_DETAIL, json!({ "pid": pid }))
-        .map_err(|error| error.to_string())
+async fn process_detail(pid: u32) -> Result<Value, String> {
+    call_daemon_async(METHOD_PROCESSES_DETAIL, json!({ "pid": pid })).await
 }
 
 #[tauri::command]
-fn list_domains(
+async fn list_domains(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
@@ -647,29 +656,23 @@ fn list_domains(
     if let Some(trust) = trust {
         params["trust"] = json!(trust);
     }
-    client()?
-        .call(METHOD_DOMAINS_LIST, params)
-        .map_err(|error| error.to_string())
+    call_daemon_async(METHOD_DOMAINS_LIST, params).await
 }
 
 #[tauri::command]
-fn list_dns(
+async fn list_dns(
     limit: Option<u32>,
     offset: Option<u32>,
     q: Option<String>,
     sort: Option<String>,
     dir: Option<String>,
 ) -> Result<Value, String> {
-    client()?
-        .call(METHOD_DNS_LIST, list_params(limit, offset, q, sort, dir))
-        .map_err(|error| error.to_string())
+    call_daemon_async(METHOD_DNS_LIST, list_params(limit, offset, q, sort, dir)).await
 }
 
 #[tauri::command]
-fn list_watched_domains() -> Result<Value, String> {
-    client()?
-        .call(METHOD_WATCHED_LIST, json!({}))
-        .map_err(|error| error.to_string())
+async fn list_watched_domains() -> Result<Value, String> {
+    call_daemon_async(METHOD_WATCHED_LIST, json!({})).await
 }
 
 #[tauri::command]
@@ -705,17 +708,13 @@ fn set_domain_trust(
 }
 
 #[tauri::command]
-fn firewall_status() -> Result<Value, String> {
-    client()?
-        .call(METHOD_FIREWALL_STATUS, json!({}))
-        .map_err(|error| error.to_string())
+async fn firewall_status() -> Result<Value, String> {
+    call_daemon_async(METHOD_FIREWALL_STATUS, json!({})).await
 }
 
 #[tauri::command]
-fn list_firewall_rules() -> Result<Value, String> {
-    client()?
-        .call(METHOD_FIREWALL_RULES_LIST, json!({}))
-        .map_err(|error| error.to_string())
+async fn list_firewall_rules() -> Result<Value, String> {
+    call_daemon_async(METHOD_FIREWALL_RULES_LIST, json!({})).await
 }
 
 #[tauri::command]
@@ -768,10 +767,8 @@ fn reset_firewall() -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn list_firewall_blocks() -> Result<Value, String> {
-    client()?
-        .call(METHOD_FIREWALL_BLOCKS_LIST, json!({}))
-        .map_err(|error| error.to_string())
+async fn list_firewall_blocks() -> Result<Value, String> {
+    call_daemon_async(METHOD_FIREWALL_BLOCKS_LIST, json!({})).await
 }
 
 #[tauri::command]
@@ -810,17 +807,13 @@ fn remove_firewall_block(
 }
 
 #[tauri::command]
-fn firewall_counters() -> Result<Value, String> {
-    client()?
-        .call(METHOD_FIREWALL_COUNTERS, json!({}))
-        .map_err(|error| error.to_string())
+async fn firewall_counters() -> Result<Value, String> {
+    call_daemon_async(METHOD_FIREWALL_COUNTERS, json!({})).await
 }
 
 #[tauri::command]
-fn list_firewall_events(limit: Option<u32>) -> Result<Value, String> {
-    client()?
-        .call(METHOD_FIREWALL_EVENTS_LIST, json!({ "limit": limit }))
-        .map_err(|error| error.to_string())
+async fn list_firewall_events(limit: Option<u32>) -> Result<Value, String> {
+    call_daemon_async(METHOD_FIREWALL_EVENTS_LIST, json!({ "limit": limit })).await
 }
 
 fn main() {

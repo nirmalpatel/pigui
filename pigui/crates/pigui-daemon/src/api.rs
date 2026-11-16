@@ -1,6 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use pigui_core::bundle;
 use pigui_core::error::{Error, Result};
@@ -76,18 +76,32 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
     Ok(())
 }
 
+const MAX_RPC_LINE_BYTES: usize = 1024 * 1024;
+
 async fn handle(stream: UnixStream, state: Arc<AppState>) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
-    let mut lines = BufReader::new(read_half).lines();
+    let mut reader = BufReader::new(read_half);
+    let mut buffer = Vec::new();
 
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
+    loop {
+        buffer.clear();
+        let read = reader.read_until(b'\n', &mut buffer).await?;
+        if read == 0 {
+            break;
         }
 
-        let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(&state, request).await,
-            Err(error) => Response::failure(0, format!("invalid request: {error}")),
+        let response = if buffer.len() > MAX_RPC_LINE_BYTES {
+            Response::failure(0, "request too large")
+        } else {
+            let line = String::from_utf8_lossy(&buffer);
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Request>(line) {
+                Ok(request) => dispatch(&state, request).await,
+                Err(error) => Response::failure(0, format!("invalid request: {error}")),
+            }
         };
 
         let mut encoded = serde_json::to_vec(&response).map_err(std::io::Error::other)?;
@@ -181,7 +195,12 @@ async fn dispatch(state: &AppState, request: Request) -> Response {
     }
 }
 
+const STATUS_CACHE_TTL: Duration = Duration::from_secs(10);
+
 fn status(state: &AppState) -> Result<StatusPayload> {
+    if let Some(cached) = state.cached_status(STATUS_CACHE_TTL) {
+        return Ok(cached);
+    }
     let (
         alert_count,
         destination_count,
@@ -217,6 +236,10 @@ fn status(state: &AppState) -> Result<StatusPayload> {
     let capture = state.capture();
     let capture_interface = capture.as_ref().map(|capture| capture.interface.clone());
     let capture_mode = capture.as_ref().map(|capture| capture.mode.clone());
+    let mut degraded = state.capabilities.degraded_reasons();
+    if let Some(warning) = capture_interface_warning(capture_interface.as_deref()) {
+        degraded.push(warning);
+    }
     let config_path = active_snort_config(&state.config);
     let snort_config_hash = pigui_snort::config_gen::file_hash(&config_path);
     let snort_config_path = Some(config_path.display().to_string());
@@ -235,9 +258,11 @@ fn status(state: &AppState) -> Result<StatusPayload> {
     let extractor_ingested = state
         .extractor_ingested
         .load(std::sync::atomic::Ordering::Relaxed);
-    let extractor_idle = alerts_ingested > 0 && extractor_ingested == 0 && state.uptime_secs() > 30;
+    let now = crate::store::unix_now();
+    state.observe_extractor_size(extractor_size, now);
+    let extractor_idle = state.extractor_is_idle(now, alerts_ingested, extractor_ingested);
 
-    Ok(StatusPayload {
+    let payload = StatusPayload {
         capabilities: state.capabilities.clone(),
         db_path: state.config.db_path.display().to_string(),
         alert_json: state.config.alert_json.display().to_string(),
@@ -250,7 +275,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         alert_count,
         destination_count,
         connection_count,
-        degraded: state.capabilities.degraded_reasons(),
+        degraded,
         environment: state.config.environment.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         snort_running: snort.running,
@@ -259,6 +284,7 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         capture_running: capture.is_some(),
         capture_interface,
         capture_mode,
+        capture_follows_default_route: state.config.snort_interface.is_none(),
         snort_config_hash,
         snort_config_path,
         active_flows,
@@ -280,10 +306,13 @@ fn status(state: &AppState) -> Result<StatusPayload> {
         firewall_block_count,
         firewall_needs_apply: firewall_state.needs_apply(),
         collector_error: state.collector_error(),
-    })
+    };
+    state.store_status(payload.clone());
+    Ok(payload)
 }
 
 async fn capture_status(state: &AppState) -> Result<Value> {
+    let _guard = state.capture_lock.lock().await;
     let helper = capture_helper_status().await.unwrap_or(Value::Null);
     let helper_running = helper
         .pointer("/data/capture_running")
@@ -303,22 +332,43 @@ async fn capture_status(state: &AppState) -> Result<Value> {
 
 async fn capture_start(state: &AppState, params: Value) -> Result<Value> {
     let request: CaptureStartRequest = serde_json::from_value(params)?;
-    let requested_interface = request.interface;
-    let helper_interface = requested_interface.clone();
+    let _guard = state.capture_lock.lock().await;
+    let capture = capture_start_locked(state, &request.interface).await?;
+    Ok(serde_json::to_value(capture)?)
+}
+
+pub(crate) async fn capture_start_locked(
+    state: &AppState,
+    requested_interface: &str,
+) -> Result<CaptureState> {
+    state.set_capture_suppressed(false);
+    let helper_interface = requested_interface.to_string();
     let helper =
         tokio::task::spawn_blocking(move || pigui_core::helper::enable_capture(&helper_interface))
             .await
             .map_err(|error| Error::Rpc(format!("capture helper task failed: {error}")))??;
+    let capture = capture_state_from_helper(state, &helper, requested_interface, None);
+    query_store(state, |store| store.save_capture_state(&capture))?;
+    state.set_capture(Some(capture.clone()));
+    Ok(capture)
+}
 
+fn capture_state_from_helper(
+    state: &AppState,
+    helper: &Value,
+    fallback_interface: &str,
+    fallback_started_at: Option<i64>,
+) -> CaptureState {
     let data = helper.get("data").cloned().unwrap_or(Value::Null);
-    let capture = CaptureState {
+    CaptureState {
         interface: data
             .get("interface")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .unwrap_or_else(|| requested_interface.clone()),
+            .unwrap_or_else(|| fallback_interface.to_string()),
         snort_pid: data
-            .get("pid")
+            .get("snort_pid")
+            .or_else(|| data.get("pid"))
             .and_then(Value::as_u64)
             .map(|value| value as u32),
         log_dir: data
@@ -331,14 +381,17 @@ async fn capture_start(state: &AppState, params: Value) -> Result<Value> {
         } else {
             "dev-helper".to_string()
         },
-        started_at: crate::store::unix_now(),
-    };
-    query_store(state, |store| store.save_capture_state(&capture))?;
-    state.set_capture(Some(capture.clone()));
-    Ok(serde_json::to_value(capture)?)
+        started_at: data
+            .get("started_at")
+            .and_then(Value::as_i64)
+            .or(fallback_started_at)
+            .unwrap_or_else(crate::store::unix_now),
+    }
 }
 
 async fn capture_ensure(state: &AppState) -> Result<Value> {
+    let _guard = state.capture_lock.lock().await;
+    state.set_capture_suppressed(false);
     let helper = capture_helper_status().await.ok();
     if let Some(helper) = helper.as_ref() {
         let running = helper
@@ -349,35 +402,13 @@ async fn capture_ensure(state: &AppState) -> Result<Value> {
             if let Some(capture) = state.capture() {
                 return Ok(serde_json::to_value(capture)?);
             }
-            let data = helper.get("data").cloned().unwrap_or(Value::Null);
-            let interface = data
-                .get("interface")
+            let interface = helper
+                .pointer("/data/interface")
                 .and_then(Value::as_str)
                 .or(state.config.snort_interface.as_deref())
                 .unwrap_or("unknown")
                 .to_string();
-            let capture = CaptureState {
-                interface,
-                snort_pid: data
-                    .get("snort_pid")
-                    .or_else(|| data.get("pid"))
-                    .and_then(Value::as_u64)
-                    .map(|value| value as u32),
-                log_dir: data
-                    .get("log_dir")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                mode: if state.config.environment == "prod" {
-                    "helper".to_string()
-                } else {
-                    "dev-helper".to_string()
-                },
-                started_at: data
-                    .get("started_at")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_else(crate::store::unix_now),
-            };
+            let capture = capture_state_from_helper(state, helper, &interface, None);
             query_store(state, |store| store.save_capture_state(&capture))?;
             state.set_capture(Some(capture.clone()));
             return Ok(serde_json::to_value(capture)?);
@@ -396,16 +427,46 @@ async fn capture_ensure(state: &AppState) -> Result<Value> {
         .clone()
         .or_else(pigui_collector::default_interface)
         .ok_or_else(|| Error::Config("no default capture interface found".into()))?;
-    capture_start(state, serde_json::json!({ "interface": interface })).await
+    let capture = capture_start_locked(state, &interface).await?;
+    Ok(serde_json::to_value(capture)?)
 }
 
 async fn capture_stop(state: &AppState) -> Result<Value> {
+    let _guard = state.capture_lock.lock().await;
+    capture_stop_locked(state, true).await?;
+    Ok(Value::from(true))
+}
+
+pub(crate) async fn capture_stop_locked(state: &AppState, user_initiated: bool) -> Result<()> {
     tokio::task::spawn_blocking(pigui_core::helper::disable_capture)
         .await
         .map_err(|error| Error::Rpc(format!("capture helper task failed: {error}")))??;
     query_store(state, |store| store.clear_capture_state())?;
     state.set_capture(None);
-    Ok(Value::from(true))
+    if user_initiated {
+        state.set_capture_suppressed(true);
+    }
+    Ok(())
+}
+
+pub(crate) async fn capture_switch_locked(
+    state: &AppState,
+    interface: &str,
+) -> Result<CaptureState> {
+    if let Err(error) = capture_stop_locked(state, false).await {
+        tracing::warn!(%error, "capture watcher could not stop capture before switching");
+    }
+    let mut last_error = None;
+    for attempt in 0..5 {
+        match capture_start_locked(state, interface).await {
+            Ok(capture) => return Ok(capture),
+            Err(error) => {
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| Error::Rpc("capture switch failed".into())))
 }
 
 async fn capture_helper_status() -> Result<Value> {
@@ -707,9 +768,20 @@ async fn analysis_findings(state: &AppState, params: Value) -> Result<Value> {
     Ok(serde_json::to_value(payload)?)
 }
 
+fn capture_interface_warning(capture_interface: Option<&str>) -> Option<String> {
+    let default_interface = pigui_collector::default_interface();
+    pigui_collector::interface_mismatch_warning(capture_interface, default_interface.as_deref())
+}
+
 fn analysis_coverage(state: &AppState) -> Result<AnalysisCoverage> {
     let settings = state.settings();
     let capture = state.capture();
+    let mut limitations = Vec::new();
+    if let Some(warning) =
+        capture_interface_warning(capture.as_ref().map(|capture| capture.interface.as_str()))
+    {
+        limitations.push(warning);
+    }
     let snort = pigui_snort::status::status(&state.config);
     let alerts_ingested = state
         .alerts_ingested
@@ -717,7 +789,12 @@ fn analysis_coverage(state: &AppState) -> Result<AnalysisCoverage> {
     let extractor_ingested = state
         .extractor_ingested
         .load(std::sync::atomic::Ordering::Relaxed);
-    let extractor_idle = alerts_ingested > 0 && extractor_ingested == 0 && state.uptime_secs() > 30;
+    let extractor_size = std::fs::metadata(&state.config.extractor_json)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let now = crate::store::unix_now();
+    state.observe_extractor_size(extractor_size, now);
+    let extractor_idle = state.extractor_is_idle(now, alerts_ingested, extractor_ingested);
     let table_counts = query_store(state, |store| store.table_counts())?
         .into_iter()
         .map(|count| AnalysisTableCount {
@@ -752,14 +829,16 @@ fn analysis_coverage(state: &AppState) -> Result<AnalysisCoverage> {
             endpoints_days: settings.retention.endpoints_days,
             ptr_days: settings.retention.ptr_days,
         },
-        limitations: Vec::new(),
+        limitations,
     })
 }
 
 fn query_store<T>(state: &AppState, f: impl FnOnce(&Store) -> Result<T>) -> Result<T> {
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| Error::Database("store lock poisoned".into()))?;
-    f(&store)
+    tokio::task::block_in_place(|| {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| Error::Database("store lock poisoned".into()))?;
+        f(&store)
+    })
 }

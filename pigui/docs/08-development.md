@@ -177,13 +177,13 @@ there is no mode variable.
 | `PIGUI_DB_PATH` | `var/lib/pigui.db` | SQLite database |
 | `PIGUI_ALERT_JSON` | `<snort log>/alert_json.txt` | Alert file to tail |
 | `PIGUI_SOCKET` | `var/run/pigui-daemon.sock` | Daemon RPC socket |
-| `PIGUI_SNORT_INTERFACE` | auto-detected | Capture interface |
+| `PIGUI_SNORT_INTERFACE` | auto-detected | Capture interface; unset follows default-route changes (including `utunN` under a full-tunnel VPN), set to pin capture |
 | `PIGUI_SNORT_LOG_DIR` | `var/log/snort` | Snort log output |
 | `PIGUI_SNORT_CONFIG_DIR` | `var/snort` | Generated Snort config |
 | `PIGUI_EXTRACTOR_JSON` | `<log>/file_connector_pigui_transmit` | Extractor JSONL |
 | `PIGUI_SNORT_PIDFILE` | `<log>/snort.pid` | Snort PID file |
 | `PIGUI_SNORT_CONTROL_SOCKET` | `var/run/snort.sock` | Reserved for planned control client |
-| `PIGUI_PROCESS_POLL_MS` | `1000` | Bootstrap `nettop` poll interval; the Settings tab value takes precedence once stored |
+| `PIGUI_PROCESS_POLL_MS` | `2000` | Bootstrap `nettop` poll interval; the Settings tab value takes precedence once stored |
 | `PIGUI_HELPER_SERVICE` | `com.pigui.helper` | Helper Mach service name; dev uses `com.pigui.helper.dev` |
 | `PIGUI_HELPER_DEV` | unset | Set to `1` by `run-dev.sh` to use dev helper paths and skip code-sign checks |
 | `PIGUI_HELPER_STATE_ROOT` | app state root | Dev helper capture-state directory |

@@ -1,10 +1,14 @@
 mod nettop;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use pigui_core::Result;
 
-pub use nettop::{default_interface, parse_nettop, run_nettop};
+pub use nettop::{
+    default_interface, interface_mismatch_warning, parse_nettop, run_nettop, run_nettop_cached,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessSample {
@@ -40,18 +44,24 @@ pub struct CollectorSnapshot {
 
 pub trait Collector {
     fn platform(&self) -> &'static str;
-    fn snapshot(&self) -> Result<CollectorSnapshot>;
+    fn snapshot(&mut self) -> Result<CollectorSnapshot>;
 }
 
 /// macOS collector backed by `nettop` CSV output.
 #[derive(Debug, Clone)]
 pub struct MacosCollector {
     interface: Option<String>,
+    metadata: HashMap<u32, (String, String)>,
+    ticks: u32,
 }
 
 impl MacosCollector {
     pub fn new(interface: Option<String>) -> Self {
-        Self { interface }
+        Self {
+            interface,
+            metadata: HashMap::new(),
+            ticks: 0,
+        }
     }
 
     pub fn interface(&self) -> Option<&str> {
@@ -64,7 +74,13 @@ impl Collector for MacosCollector {
         "macos"
     }
 
-    fn snapshot(&self) -> Result<CollectorSnapshot> {
-        run_nettop(self.interface.as_deref())
+    fn snapshot(&mut self) -> Result<CollectorSnapshot> {
+        self.ticks = self.ticks.wrapping_add(1);
+        let refresh_metadata = self.ticks.is_multiple_of(5);
+        run_nettop_cached(
+            self.interface.as_deref(),
+            &mut self.metadata,
+            refresh_metadata,
+        )
     }
 }

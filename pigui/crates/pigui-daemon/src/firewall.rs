@@ -323,12 +323,14 @@ async fn sync_active_blocks(state: &AppState) {
 
 pub fn spawn_reconciler(state: Arc<AppState>) {
     tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(15));
+        let mut ticker = interval(Duration::from_secs(30));
+        let mut ticks: u64 = 0;
         loop {
             tokio::select! {
                 _ = state.wait_for_shutdown() => break,
                 _ = ticker.tick() => {}
             }
+            ticks = ticks.wrapping_add(1);
 
             let now = unix_now();
             let expired = match with_store(&state, |store| store.expired_firewall_blocks(now)) {
@@ -384,6 +386,11 @@ pub fn spawn_reconciler(state: Arc<AppState>) {
                 continue;
             }
 
+            // While the firewall is disabled, only check for helper drift occasionally.
+            if !enabled && !ticks.is_multiple_of(2) {
+                continue;
+            }
+
             let helper = match helper_status().await {
                 Ok(value) => value,
                 Err(error) => {
@@ -433,9 +440,11 @@ fn record_error(state: &AppState, error: &Error) {
 }
 
 fn with_store<T>(state: &AppState, f: impl FnOnce(&Store) -> Result<T>) -> Result<T> {
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| Error::Database("store lock poisoned".into()))?;
-    f(&store)
+    tokio::task::block_in_place(|| {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| Error::Database("store lock poisoned".into()))?;
+        f(&store)
+    })
 }

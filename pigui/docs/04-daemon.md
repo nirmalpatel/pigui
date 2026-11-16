@@ -37,7 +37,8 @@ daemon explicitly through the scripts. Daemon output is written to
 | Flag | Purpose |
 |---|---|
 | `--alerts-file <PATH>` | Alert JSONL file to tail; defaults to `PIGUI_ALERT_JSON` |
-| `--from-end` | Start at the current end of the alert file instead of replaying it |
+| `--from-end` | Start at the current end of the files (default; kept for compatibility) |
+| `--replay` | Replay existing alert and extractor files from the beginning |
 | `--once` | Ingest the alert file once and exit |
 | `--db <PATH>` | Override the SQLite database path |
 | `--socket <PATH>` | Override the daemon socket path |
@@ -66,7 +67,7 @@ On startup the daemon:
 |---|---|---|
 | Alert tailer | 500 ms | Polls the alert file, parses `alert_json`, inserts alerts |
 | Extractor tailer | 500 ms | Polls the extractor JSONL file, classifies and inserts records |
-| Process collector | Settings `collector.poll_ms` (default 1000 ms, minimum 250 ms) | Runs `nettop`, enriches with `ps`, upserts processes and live flows |
+| Process collector | Settings `collector.poll_ms` (default 2000 ms, minimum 250 ms) | Runs `nettop`, enriches with cached `ps` metadata, upserts processes and live flows |
 | Name resolver | Settings `resolver.loop_secs` (default 30 s) | Resolves PTR candidates and due watched domains |
 | Maintenance | Settings `maintenance.interval_secs` (default 300 s) | Prunes old rows using the configured retention limits |
 | Capture control | Event-driven RPC | Starts/stops Snort via the dev or packaged helper, records the active interface, and supports idempotent `capture.ensure` for automatic startup |
@@ -75,9 +76,10 @@ On startup the daemon:
 The collectors run on dedicated OS threads so the single-threaded async runtime
 is not blocked by `nettop`, `ps`, or DNS.
 
-Both tailers start at the beginning of their files by default. The daemon relies
-on SQLite dedupe indexes, so replaying does not duplicate rows. Use `--from-end`
-for alerts when replay is unwanted.
+Both tailers start at the current end of their files by default, so restarting
+the daemon does not replay a large backlog. Use `--replay` for diagnostics when
+historical content must be ingested. The daemon still relies on SQLite dedupe
+indexes, so replaying does not duplicate rows.
 
 Path handling:
 
@@ -136,8 +138,10 @@ Degraded reasons are derived from Snort capabilities:
 - Failed config validation.
 
 The extractor is reported idle when alerts have arrived, the extractor has
-ingested nothing, and the daemon has been up for more than 30 seconds. This usually means `default_filter` is missing or the extractor file
-is not growing.
+ingested nothing, and the extractor file has not grown for five minutes. Snort
+buffers the file connector and flushes in 8 KiB chunks, so a short delay after
+capture starts is normal. A persistent idle state usually means `default_filter`
+is missing or the extractor file is not growing.
 
 ## Logging
 
@@ -153,4 +157,5 @@ Tracing output goes to stdout with ANSI disabled when not a terminal. Set
 - PF helper execution, daemon firewall RPC, reconciliation, TTL sweeping, and
   the Firewall tab exist; event history is still pending. Capture state is
   persisted and recovered across daemon/helper restarts.
-- No log rotation job yet; database retention is implemented.
+- Log rotation is size-based for daemon and helper audit logs; database retention
+  is implemented.

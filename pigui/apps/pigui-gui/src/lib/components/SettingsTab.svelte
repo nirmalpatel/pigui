@@ -20,13 +20,13 @@
     return {
       theme: "system",
       ui: {
-        refresh_ms: 2000,
-        page_size: 200,
+        refresh_ms: 5000,
+        page_size: 100,
         detail_alert_limit: 10,
         stale_after_secs: 600,
       },
-      limits: { max_page_size: 1000 },
-      collector: { poll_ms: 1000 },
+      limits: { max_page_size: 500 },
+      collector: { poll_ms: 2000 },
       retention: {
         flows_secs: 600,
         processes_secs: 86400,

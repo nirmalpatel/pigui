@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 
 use pigui_core::config::Config;
 use serde::{Deserialize, Serialize};
@@ -50,10 +49,21 @@ fn socket_exists(path: &Path) -> bool {
 }
 
 fn process_exists(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        // Signal 0 performs existence and permission checks without spawning a process.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 }

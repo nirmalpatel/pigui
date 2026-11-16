@@ -188,6 +188,21 @@ Attribution is best-effort for short-lived flows, UDP, connections that close
 between polls, and traffic owned by other users when collection lacks
 privilege. A future Network Extension could provide stronger attribution.
 
+Capture limitations:
+
+- PIGUI captures one interface at a time. When a full-tunnel VPN is active the
+  default route is a `utunN` interface and `en0` carries only the encrypted
+  tunnel underlay. If capture is not pinned with `PIGUI_SNORT_INTERFACE`, the
+  daemon follows default-route changes after the new interface is stable for
+  about six seconds. Switching restarts Snort, so expect a short capture gap.
+  The status payload reports a warning when a pinned capture interface and the
+  default route differ.
+- QUIC/HTTP3 SNI is not decoded by the current Snort build. QUIC traffic appears
+  as generic UDP flows and can still be process-attributed through `nettop`.
+- Split-tunnel VPNs can send some traffic over the physical interface and some
+  over the tunnel; a single-interface capture will miss whichever side is not
+  selected.
+
 ## Name resolution
 
 PTR:

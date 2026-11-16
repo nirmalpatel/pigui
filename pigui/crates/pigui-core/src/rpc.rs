@@ -362,6 +362,8 @@ pub struct StatusPayload {
     #[serde(default)]
     pub capture_mode: Option<String>,
     #[serde(default)]
+    pub capture_follows_default_route: bool,
+    #[serde(default)]
     pub snort_config_hash: Option<String>,
     #[serde(default)]
     pub snort_config_path: Option<String>,

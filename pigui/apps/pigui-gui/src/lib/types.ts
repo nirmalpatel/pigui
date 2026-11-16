@@ -233,6 +233,7 @@ export interface StatusPayload {
   capture_running: boolean;
   capture_interface?: string;
   capture_mode?: string;
+  capture_follows_default_route: boolean;
   snort_config_hash?: string;
   snort_config_path?: string;
   active_flows: number;
