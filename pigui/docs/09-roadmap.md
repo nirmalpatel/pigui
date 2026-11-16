@@ -61,7 +61,7 @@ what is planned.
 
 | Platform | Snort mode | Enforcement | Process attribution | Status |
 |---|---|---|---|---|
-| macOS 14+ | Passive pcap/BPF | PF (planned) | `nettop`/`ps` | Supported |
+| macOS 14+ | Passive pcap/BPF | PF (implemented, opt-in) | `nettop`/`ps` | Supported |
 | Linux | Passive first, inline optional | ufw/nftables (planned) | `ss`/`/proc`/eBPF (planned) | In progress |
 | Windows | Native support uncertain | Defender Firewall/WFP (planned) | `GetExtendedTcpTable`/ETW (planned) | In progress |
 
@@ -93,6 +93,7 @@ Resolved:
 - PIGUI consumes Snort as an external process, not a linked library.
 - Snort control socket is preferred for management, with signal/file fallback.
 - Enforcement is firewall-based and off by default.
+- Distribution uses a signed, notarized, and stapled Developer ID app and DMG.
 - PIGUI is GPLv2-compatible while it lives in the Snort 3 tree.
 
 Still open:
@@ -102,8 +103,6 @@ Still open:
 - Whether the ruleset is native Snort syntax or a custom DSL requiring a
   compiler.
 - Windows native sensor versus WSL2/container/remote Linux sensor.
-- Distribution and notarization workflow. Packaging scripts exist; signing,
-  notarization, and release credentials still need to be set.
 
 ## License
 

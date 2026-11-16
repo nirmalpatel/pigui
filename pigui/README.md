@@ -8,8 +8,8 @@ Activity Monitor-style GUI.
 Status: early implementation. Fixture ingestion, live alert/extractor
 ingestion, nettop process attribution, the daemon RPC API, the CLI, the Tauri
 shell, macOS app packaging, a minimal SMAppService/XPC helper, and a
-signed/notarized DMG workflow exist. PF enforcement and rule bundles are still
-planned.
+signed/notarized DMG workflow exist. PF enforcement is implemented and opt-in;
+rule bundles and a policy engine are still planned.
 
 PIGUI lives inside the Snort 3 repository on the `pigui` branch, but it is not
 part of the Snort core build. PIGUI does not link against Snort C++ internals

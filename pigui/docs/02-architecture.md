@@ -1,8 +1,7 @@
 # Architecture
 
 PIGUI is a Rust workspace plus a Tauri GUI. It consumes Snort as an external
-process. Snort, the daemon, the GUI, and the planned helper are separate trust
-domains.
+process. Snort, the daemon, the GUI, and the helper are separate trust domains.
 
 ## Process and privilege model
 

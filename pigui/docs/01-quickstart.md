@@ -157,5 +157,9 @@ starts capture automatically. If macOS asks you to approve PIGUI in Login Items
 & Extensions, approve it once; capture starts by itself afterwards. The packaged
 app does not use `sudo`.
 
+Packaged capture follows default-route changes by default, so turning a
+full-tunnel VPN on or off moves capture between `en0` and `utunN`. Set
+`PIGUI_SNORT_INTERFACE` to pin capture to one interface and disable auto-follow.
+
 See [`packaging/macos/README.md`](../packaging/macos/README.md) for packaging,
 signing, and notarization details.

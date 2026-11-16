@@ -94,7 +94,7 @@ These constraints are architectural requirements:
 
 - Snort on macOS uses pcap/BPF passively. It detects and logs; it cannot drop
   packets inline.
-- Enforcement on macOS is planned through PF, not Snort.
+- Enforcement on macOS is implemented through PF, not Snort. It is opt-in.
 - Snort sees packets and flows, not processes. Attribution must come from the
   OS: `nettop`, `lsof`, `netstat`, or later a Network Extension.
 - Snort's control socket exists only when built with `--enable-shell`.

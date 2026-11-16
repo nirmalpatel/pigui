@@ -217,8 +217,9 @@ cargo test -p pigui-daemon
 ```
 
 Fixtures are for tests only and are not part of `run-dev.sh`. When testing
-ingestion manually, the daemon replays alert files from the beginning and
-relies on the dedupe index, so repeat runs are safe.
+ingestion manually, `pigui-cli ingest --file` reads the file directly. The
+daemon tailers start at the end of existing files by default; use `--replay` to
+ingest from the beginning. The dedupe index keeps repeat runs safe.
 
 ## Adding a platform adapter
 

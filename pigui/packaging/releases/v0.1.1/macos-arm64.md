@@ -5,11 +5,11 @@
 ```text
 File:               PIGUI-0.1.1-macos-arm64.dmg
 Path:               target/macos/PIGUI-0.1.1-macos-arm64.dmg
-SHA-256:            92f47fd91ee305105322f95fc130adc760d6f42aed1dbfc74e24494214f96f42
-Size:               40013174 bytes
+SHA-256:            6e848ec29ea2ff3d50f5c8be7b9209ac79f1f789e4e3619486a47f2f8d247e7f
+Size:               40223898 bytes
 Arch:               arm64
 Min macOS:          14.0
-App build commit:   0c9b64dc4
+App build commit:   3040def12
 Release tag:        pigui-v0.1.1
 ```
 
@@ -19,16 +19,18 @@ below. The bundle includes `pigui-mcp`, the read-only MCP analysis server, and
 `pigui-helper`, which provides the PF-backed firewall integration.
 
 Earlier v0.1.1 builds were notarized but not published. They are superseded
-by this rebuild, which adds the MCP analysis server, firewall integration and
-Firewall tab, analysis RPC methods, and updated documentation.
+by this final re-cut, which adds automatic VPN/default-route interface
+following, daemon and UI performance improvements, and updated documentation in
+addition to the MCP analysis server, firewall integration and Firewall tab, and
+analysis RPC methods.
 
 ## Signing and notarization
 
 ```text
 Team ID:                 HQ9NP5ZSL5
 Signing identity:        Developer ID Application: EDOPTIMIZE SOLUTIONS PRIVATE LIMITED (HQ9NP5ZSL5)
-App notary submission:   5fe9e3ce-7c50-4d97-82bf-55fd0514213b
-DMG notary submission:   cfa6839c-6aaf-4b7a-9caa-faaf7adaf340
+App notary submission:   d644f9db-a612-4480-8b49-398c0a05fc02
+DMG notary submission:   d4c35bdb-bfa9-41d9-9540-78aa3a538482
 App notary status:       Accepted
 DMG notary status:       Accepted
 App staple:              verified

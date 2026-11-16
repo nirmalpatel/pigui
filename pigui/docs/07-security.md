@@ -125,7 +125,7 @@ Requirements:
   actions are audited now; rule changes are planned.
 - Enforcement is off by default and uses a PIGUI-owned PF anchor. Implemented in
   the helper, daemon RPC, and Firewall tab.
-- Distribution builds are signed and notarized. Planned; packaging supports it.
+- Distribution builds are signed, notarized, and stapled. Implemented.
 - Helper installation uses SMAppService, not ad-hoc privilege escalation.
   Implemented.
 

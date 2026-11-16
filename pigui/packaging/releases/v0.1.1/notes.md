@@ -9,6 +9,21 @@ manager daemon, a privileged firewall helper, and an Activity Monitor-style GUI.
 
 ## What's changed
 
+- Capture now follows default-route changes while running, including `en0` and
+  `utunN` transitions when a full-tunnel VPN connects or disconnects. PIGUI waits
+  for the new interface to be stable before restarting Snort. Set
+  `PIGUI_SNORT_INTERFACE` to pin capture to one interface; the status payload
+  warns when a pinned interface differs from the default route.
+- Improved daemon and GUI responsiveness with cached status responses,
+  asynchronous GUI daemon calls, and a shared daemon client.
+- Reduced default `nettop` polling to 2 seconds and reuse cached `ps` metadata.
+- Alert and extractor tailers now start at the end of existing files by default;
+  use `--replay` for diagnostic backfill. Extractor idle detection is based on
+  file growth rather than daemon uptime alone.
+- Added size-based log rotation for the daemon log and privileged helper audit
+  log.
+- Reduced background firewall and UI polling with reconciler throttling, helper
+  read-only caching, and visibility-aware Firewall tab refreshes.
 - Added a read-only MCP analysis server (`pigui-mcp`) for OpenCode and other MCP
   clients. The binary is bundled in the app and exposes daemon telemetry such as
   status, overview, findings, alerts, flows, processes, connections, domains,
@@ -55,6 +70,8 @@ manager daemon, a privileged firewall helper, and an Activity Monitor-style GUI.
 
 The DMG is signed with a Developer ID Application certificate, notarized by
 Apple, and stapled. Open the DMG and drag **PIGUI** into **Applications**.
+
+This build supersedes earlier unpublished v0.1.1 builds.
 
 ## Install and enable capture
 
@@ -107,7 +124,7 @@ spctl -a -vvv -t install PIGUI-0.1.1-macos-arm64.dmg
 SHA-256:
 
 ```text
-92f47fd91ee305105322f95fc130adc760d6f42aed1dbfc74e24494214f96f42
+6e848ec29ea2ff3d50f5c8be7b9209ac79f1f789e4e3619486a47f2f8d247e7f
 ```
 
 ## Known limitations
@@ -117,6 +134,11 @@ SHA-256:
 - MCP analysis sends network metadata to the configured model provider. OS
   usernames are redacted by default; process paths and network identifiers are
   preserved for attribution.
+- PIGUI captures one interface at a time. A full-tunnel VPN moves traffic to a
+  `utunN` interface, and auto-follow restarts capture to track it. Split-tunnel
+  VPNs can carry traffic on both interfaces; the unselected side is not captured.
+- QUIC/HTTP3 SNI is not decoded by this Snort build. QUIC appears as generic UDP
+  and can still be process-attributed through `nettop`.
 - Passive capture only sees this machine's traffic.
 - HTTPS hostnames come from DNS/SNI, not payload decryption.
 - Process attribution and short-lived flow attribution are best-effort.
